@@ -20,6 +20,23 @@ const bytes = fs.readFileSync('public/atto_compiler.wasm');
 const module = new WebAssembly.Module(bytes);
 const { exports: api } = new WebAssembly.Instance(module, {});
 const actorSupported = WebAssembly.Module.exports(module).some(x => x.name === 'compile_actor' && x.kind === 'function');
+const compilerSha = crypto.createHash('sha256').update(bytes).digest('hex');
+// CI metadata must come from a separately reviewed SOURCE-OWNED build,
+// not from guesses or an unverified local build. A local rebuild is admissible
+// only if its bytes match the approved CI artifact's exact digest.
+const actorEvidence = actorSupported ? {
+  actor_abi: 'atto.browser.actor.scalar.v0',
+  source_ci_run_id: process.env.ATTO_ACTOR_CI_RUN_ID,
+  source_ci_job_id: process.env.ATTO_ACTOR_CI_JOB_ID,
+  source_ci_artifact_id: process.env.ATTO_ACTOR_CI_ARTIFACT_ID,
+  source_ci_compiler_sha256: process.env.ATTO_ACTOR_CI_SHA256,
+} : {};
+if (actorSupported && (
+    ['source_ci_run_id','source_ci_job_id','source_ci_artifact_id']
+      .some(key => !/^[1-9][0-9]{0,18}$/.test(actorEvidence[key] ?? '')) ||
+    actorEvidence.source_ci_compiler_sha256 !== compilerSha)) {
+  throw new Error('E_ACTOR_RELEASE: independently reviewed exact CI run/job/artifact and matching SHA-256 are required');
+}
 const receipt = {
   schema: 'atto.browser.compiler.vendor.v1',
   source_repository: 'atto-lang/atto-source.rs',
@@ -29,8 +46,8 @@ const receipt = {
   target: 'wasm32-unknown-unknown',
   compiler_abi: api.abi_version(),
   guest_abi: 'atto.browser.guest.v1',
-  ...(actorSupported ? { actor_abi: 'atto.browser.actor.scalar.v0' } : {}),
-  compiler_sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+  ...actorEvidence,
+  compiler_sha256: compilerSha,
   compiler_bytes: bytes.length,
 };
 fs.writeFileSync('public/atto_compiler.receipt.json', JSON.stringify(receipt, null, 2) + '\n');
