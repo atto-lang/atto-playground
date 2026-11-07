@@ -207,7 +207,7 @@ async function runActor() {
     wasmPreview.textContent = formatWasm(lastWasm);
     bytesLabel.textContent = `${lastWasm.byteLength} bytes`;
     downloadButton.disabled = false;
-    actorTranscript = 'Actor ready (receive(int) → int). Send a signed 64-bit integer.\\n';
+    actorTranscript = 'Actor ready (receive(int) → int). Send a signed 64-bit integer.\n';
     status.textContent = 'Actor ready';
     display(actorTranscript, 'success');
   } catch (error) {
