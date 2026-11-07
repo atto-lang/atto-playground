@@ -1,0 +1,33 @@
+{
+  "schema": "atto.playground.compiler.candidate.v1",
+  "status": "AWAITING_INDEPENDENT_APPROVAL_AND_PAGES_FIX",
+  "publish_authorized": false,
+  "source_repository": "atto-lang/atto-source.rs",
+  "source_pull_request": 15,
+  "source_head": "42a5dc3c6b8ec8bdca7f1f85ec6f3c5000737b72",
+  "source_tree": "74085b4e5f6fcc22662dcbd9bf8bbe420d07170d",
+  "ci_run_id": 42403867649,
+  "ci_success": true,
+  "ci_executed_steps": 13,
+  "compiler_abi": "atto-playground-v2",
+  "guest_abi": "atto.browser.guest.v1",
+  "target": "wasm32-unknown-unknown",
+  "compiler_bytes": 179634,
+  "compiler_sha256": "bc86a7003aba50fc922f478a347e8ee921a3b016a2ca21ba8a3f3a84f5e0c4a6",
+  "compiler_artifact_id": 13585569826,
+  "conformance_passed": 141,
+  "native_wasm_byte_parity_passed": 106,
+  "chromium_scenarios_passed": 10,
+  "java_differential": "NOT_EXECUTED",
+  "canonical_backend_parity": "UNPROVEN",
+  "public_pages_issue": "https://github.com/atto-lang/atto-lang.github.io/issues/5",
+  "required_before_promotion": [
+    "independent compiler source approval at final head",
+    "independent playground/source pin review",
+    "Pages branch-source bypass disabled by administrator",
+    "protected github-pages environment and negative unapproved-release tests",
+    "exact bytes and receipt digest verified at public staging",
+    "manual approved release and HTTPS acceptance"
+  ],
+  "note": "Metadata-only candidate for private reviewer coordination; this file does not ship or authorize compiler bytes. The existing vendored compiler remains unchanged."
+}
