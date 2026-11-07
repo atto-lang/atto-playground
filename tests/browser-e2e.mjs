@@ -256,6 +256,47 @@ try {
   s=await run('error','E_TOPLEVEL');
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
+
+  // End-to-end source-compiled actor UI path, explicitly partitioned by the
+  // source compiler ABI actually present in the pinned, approved artifact.
+  const actorSource='define actor Worker as receive(int value): int { return value + 1; } end';
+  const pinnedCompiler = new WebAssembly.Module(await readFile(join(root,'public/atto_compiler.wasm')));
+  const hasActorCompiler = WebAssembly.Module.exports(pinnedCompiler)
+    .some(e=>e.kind==='function'&&e.name==='compile_actor');
+  await source(actorSource);
+  await click('run-actor');
+  if (hasActorCompiler) {
+    s=await poll(async()=>{const x=await view();return x?.kind==='success'&&x.output?.includes('Actor ready')&&!x.runDisabled?x:null;},'actor source compiled and running');
+    assert.equal(await js("document.querySelector('#send-actor').disabled"),false);
+    assert.equal(s.downloadDisabled,false);
+    await click('send-actor'); // default signed integer message 41
+    s=await poll(async()=>{const x=await view();return x?.output?.includes('receive(41) → 42')?x:null;},'actor response 42');
+    assert.equal(s.kind,'success');
+    await js("document.querySelector('#actor-value').value='9223372036854775808'");
+    await click('send-actor');
+    await poll(async()=> (await view())?.output?.includes('E_ACTOR_MESSAGE'), 'out-of-bounds actor message refused');
+    await js("document.querySelector('#actor-value').value='0'");
+    await click('send-actor');
+    await poll(async()=> (await view())?.output?.includes('receive(0) → 1'), 'actor survives rejected host message');
+    await click('stop');
+    assert.equal(await js("document.querySelector('#send-actor').disabled"),true);
+    ok('source-compiled actor Wasm executes in real browser Web Worker and enforces signed i64 messages');
+  } else {
+    s=await poll(async()=>{const x=await view();return x?.diagnostics?.includes('E_ACTOR_UNAVAILABLE')&&!x.runDisabled?x:null;},'old pinned compiler fails closed on actor');
+    assert.equal(s.bytes,'—');
+    assert.equal(s.downloadDisabled,true);
+    assert.equal(await js("document.querySelector('#send-actor').disabled"),true);
+    assert.equal(await js("document.querySelector('#run-actor').disabled"),false);
+    ok('unupgraded pinned compiler refuses actor source without emitting executable guest Wasm');
+    if (process.env.ATTO_REQUIRE_ACTOR_SOURCE_E2E === '1') {
+      throw new Error('NOT_CERTIFIED: source-compiled actor browser E2E requires a reviewed compiler exporting compile_actor');
+    }
+    console.log('NOT_EXECUTED: source-compiled actor browser guest unavailable in pinned compiler');
+  }
+  await source('fnc main() -> int { return 42; }');
+  await run('success','main() → 42');
+  ok('normal main compilation recovers after actor start/stop or unavailable ABI');
+
   // Execute real Web Workers with separate Wasm instances and FIFO i64 messages.
   // The fixture is hand-assembled Wasm, not yet AttoLang actor source lowering.
   const actorProbe=await js(`(async()=>{
