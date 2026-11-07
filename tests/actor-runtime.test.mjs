@@ -22,7 +22,7 @@ test('source-free contract fails closed for wrong exports, malformed modules and
   assert.throws(() => validateActorGuest(new Uint8Array(ACTOR_MAX_WASM_BYTES + 1)));
   assert.throws(() => validateActorGuest(new Uint8Array([0, 97, 115, 109])));
   const renamed = new Uint8Array(COUNTER_WASM);
-  renamed[31] = 88; // export name (7 characters), valid Wasm but wrong interface
+  renamed[32] = 88; // first export-name byte, valid Wasm but wrong interface
   assert.equal(WebAssembly.validate(renamed), true);
   assert.throws(() => validateActorGuest(renamed), /export only receive/);
   assert.throws(() => validateActorGuest({}), /Invalid or oversized/);
