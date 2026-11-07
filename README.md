@@ -38,3 +38,9 @@ Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a 
 ## Browser editor UI
 
 The accessible native editor provides a line gutter, line/column display, keyboard indentation, Ctrl/⌘+Enter to run, selectable diagnostics and Console/Diagnostics/Wasm tabs. Source code stays in the browser; output and downloaded Wasm are invalidated on edits. `src/editor.js` and `src/ui.js` are explicit required release assets and are covered by Node and Chromium E2E tests.
+
+## Custom programs and syntax highlighting
+
+Choose **Custom +** in the Program selector to keep the current editor text as a custom draft. Enter a name and click **Save**. Saved programs reappear in the same dropdown on the same browser origin after refresh; clicking an existing name loads it and Save overwrites that name. Delete removes the saved copy but keeps current editor text. Storage is explicitly local, capped at 30 named programs / 64 KiB per program, and may be disabled by browser privacy settings. Storage is scoped to the browser origin (scheme, host, and port), not the URL path: `/play/` and `/atto-playground/` on `atto-lang.github.io` share it, while a different host does not. No source is submitted to a compilation service.
+
+The highlighting mirror uses conservative token classes based on the Oreslang formatter's lexical/comment rules. It cannot replace the formatter's Rust semantics or validate syntax. Real typing and assistive access remain on the native textarea; the highlight layer only accepts DOM text nodes and has no HTML interpreter.
