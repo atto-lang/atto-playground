@@ -22,12 +22,13 @@ const port = server.address().port;
 const browser = process.env.CHROME_BIN || 'chromium';
 function headless(url) {
   return new Promise((resolve, reject) => {
-    const p = spawn(browser, ['--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--no-first-run', '--virtual-time-budget=8000', '--dump-dom', url], { stdio: ['ignore','pipe','pipe'] });
+    const p = spawn(browser, ['--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking', '--no-first-run', '--virtual-time-budget=8000', '--dump-dom', url], { stdio: ['ignore','pipe','pipe'] });
     let stdout = '', stderr = '';
     p.stdout.on('data', d => {stdout += d.toString();});
     p.stderr.on('data', d => {stderr += d.toString().slice(0,1000);});
-    p.on('error', reject);
-    p.on('close', n => n === 0 ? resolve(stdout) : reject(new Error(`Chromium exited ${n}: ${stderr.slice(-900)}`)));
+    const deadline = setTimeout(() => p.kill('SIGKILL'), 20000);
+    p.on('error', error => {clearTimeout(deadline); reject(error);});
+    p.on('close', n => {clearTimeout(deadline); n === 0 ? resolve(stdout) : reject(new Error(`Chromium exited ${n}: ${stderr.slice(-900)}`));});
   });
 }
 try {
