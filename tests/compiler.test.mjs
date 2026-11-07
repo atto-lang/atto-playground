@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { createCompiler, verifyCompilerBytes, COMPILER_ABI } from '../src/compiler.js';
 import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
 import { guestImports, describePanic, appendCapped, STDOUT_LIMIT } from '../src/guest.js';
+import { validateActorGuest } from '../src/actor-abi.js';
 
 const compilerBytes = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
 const receipt = JSON.parse(await readFile(new URL('../public/atto_compiler.receipt.json', import.meta.url), 'utf8'));
@@ -42,6 +43,27 @@ test('vendored compiler matches its provenance receipt', () => {
 test('compiler itself is WebAssembly with no host imports', async () => {
   const mod = await WebAssembly.compile(compilerBytes);
   assert.deepEqual(WebAssembly.Module.imports(mod), []);
+});
+
+
+test('actor compilation uses the reviewed ABI export, never silently reuses main()', () => {
+  const source = 'define actor Worker as receive(int value): int { return value + 1; } end';
+  const exports = WebAssembly.Module.exports(new WebAssembly.Module(compilerBytes));
+  const actorCapable = exports.some(e => e.name === 'compile_actor' && e.kind === 'function');
+  const result = compiler.compileActor(source);
+  if (actorCapable) {
+    assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+    assert.deepEqual(WebAssembly.Module.imports(validateActorGuest(result.wasm)), []);
+    assert.equal(new WebAssembly.Instance(validateActorGuest(result.wasm), {}).exports.receive(41n), 42n);
+    const invalid = compiler.compileActor('define actor Worker as receive(bool value): int { return 42; } end');
+    assert.equal(invalid.ok, false);
+    assert.equal('wasm' in invalid, false);
+  } else {
+    assert.equal(result.ok, false);
+    assert.match(result.diagnostics?.[0]?.message ?? '', /^E_ACTOR_UNAVAILABLE/);
+    assert.equal('wasm' in result, false);
+    assert.equal(compiler.compile('pub fnc main(): int { return 42; }').ok, true);
+  }
 });
 
 test('real Atto source to Wasm to execution yields 42', async () => {
