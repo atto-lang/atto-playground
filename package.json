@@ -1,0 +1,15 @@
+{
+  "name": "@atto-lang/playground",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "A serverless AttoLang source-to-WebAssembly playground",
+  "scripts": {
+    "build:compiler": "sh scripts/build-compiler.sh",
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tests/browser-smoke.mjs",
+    "verify": "npm run build:compiler && npm test",
+    "serve": "python3 -m http.server 8080"
+  },
+  "engines": { "node": ">=20" }
+}
