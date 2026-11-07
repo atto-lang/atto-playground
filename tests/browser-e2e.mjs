@@ -8,7 +8,7 @@ import { readFile, readdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { join, resolve, sep, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const root = resolve(new URL('..', import.meta.url).pathname);
+const root = process.env.ATTO_STATIC_ROOT ? resolve(process.env.ATTO_STATIC_ROOT) : resolve(new URL('..', import.meta.url).pathname);
 const mime = { '.html':'text/html', '.css':'text/css', '.js':'text/javascript', '.wasm':'application/wasm', '.md':'text/plain' };
 const requests = [];
 const server = createServer(async (req, res) => {
@@ -93,7 +93,11 @@ try {
   }
   const click=id=>js("document.querySelector("+JSON.stringify('#'+id)+").click()");
   const source=text=>js("(()=>{const e=document.querySelector('#source');e.value="+JSON.stringify(text)+";e.dispatchEvent(new Event('input',{bubbles:true}));})()");
-  const example=name=>js("(()=>{const e=document.querySelector('#example');e.value="+JSON.stringify(name)+";e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  // examples are fetched .atto files, so wait for the editor to be replaced
+  const example=async name=>{
+    await js("(()=>{const e=document.querySelector('#example');e.value="+JSON.stringify(name)+";e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+    await poll(async()=>(await view())?.output?.includes('Source changed'),'example '+name+' loaded');
+  };
   async function run(kind,expected) {
     await click('run');
     return poll(async()=>{
@@ -107,9 +111,17 @@ try {
   await navigate(base);
   ok('static site resolves under /play/');
   let s=await run('success','main() → 42');
+  assert.match(s.output,/^Hello from WebAssembly!\n42\nmain\(\) → 42/);
   assert.match(s.bytes,/^\d+ bytes$/);
   assert.equal(s.downloadDisabled,false);
   ok('real Run control compiles Atto into Wasm and executes 42');
+  assert.equal(await js("document.querySelector('#tab-console').getAttribute('aria-selected')"), 'true');
+  await click('tab-wasm');
+  const preview=await js("document.querySelector('#wasm-preview').textContent");
+  assert.match(preview,/WebAssembly binary\nSize: \d+ bytes\nHeader and first \d+ bytes:\n00 61 73 6d/);
+  assert.equal(await js("document.querySelector('#panel-console').hidden"),true);
+  await click('tab-console');
+  ok('accessible tabs expose a bounded Wasm hex preview without replacing the console');
   await click('download');
   const wasm=await poll(async()=>{
     const files=(await readdir(downloads)).filter(n=>n.endsWith('.wasm'));
@@ -117,7 +129,10 @@ try {
     const bytes=await readFile(join(downloads,files[0]));
     return WebAssembly.validate(bytes)?bytes:null;
   },'downloaded binary');
-  assert.equal((await WebAssembly.instantiate(wasm,{})).instance.exports.main(),42);
+  const printed=[];
+  const atto={print_i64:v=>printed.push(String(v)),print_bool:v=>printed.push(String(!!v)),print_str:()=>printed.push('str'),print_newline:()=>{}};
+  assert.equal((await WebAssembly.instantiate(wasm,{atto})).instance.exports.main(),42n);
+  assert.deepEqual(printed,['str','42']);
   ok('downloaded real guest Wasm validates and executes');
   await source('fnc main() -> int { return 17 + 8; }');
   s=await view();
@@ -125,28 +140,47 @@ try {
   assert.equal(s.downloadDisabled,true);
   await run('success','main() → 25');
   ok('editing invalidates old download and changes guest result');
-  await example('mutable');
-  await run('success','main() → 42');
-  ok('mutable sample executes');
+  await example('primes');
+  s=await run('success','main() → 10');
+  assert.match(s.output,/^2\n3\n5\n7\n11\n13\n17\n19\n23\n29\nmain\(\) → 10/);
+  ok('loops example executes with stdout');
   await example('error');
   s=await run('error','E_IMMUTABLE');
   assert.equal(s.bytes,'—');assert.equal(s.downloadDisabled,true);
   ok('immutable reassignment rejected without output artifact');
+  assert.equal(await js("document.querySelector('#tab-diagnostics').getAttribute('aria-selected')"),'true');
+  assert.equal(await js("document.querySelector('#diagnostics button')?.tagName"),'BUTTON');
+  await js("document.querySelector('#diagnostics button').click()");
+  assert.equal(await js("document.activeElement?.id"),'source');
+  ok('compiler errors switch to Diagnostics and jump to the native editor');
   await source('fnc main() -> int { return 2 + ; }');
-  s=await run('error','E_EXPRESSION');
+  s=await run('error','E_SYNTAX');
   assert.equal(s.downloadDisabled,true);
   ok('syntax error rejected in UI');
-  await source('fnc main() -> int { return 42 / (3 - 3); }');
-  s=await run('error','E_RUNTIME');
+  await source('fnc zero(): int { return 0; }\nfnc main() -> int { return 42 % zero(); }');
+  s=await run('error','E_PANIC: division by zero');
   assert.match(s.bytes,/^\d+ bytes$/);
-  ok('runtime trap distinguished from compile error');
-  await source('fnc main() -> int { return 42; }'+' '.repeat(5000));
+  ok('runtime panic distinguished from compile error');
+  await example('overflow');
+  s=await run('error','E_PANIC: integer overflow');
+  assert.match(s.output,/4611686018427387904\nE_PANIC: integer overflow/);
+  ok('checked int overflow panics and keeps earlier output');
+  await source('fnc main() -> int { loop { } }');
+  s=await run('error','deadline');
+  ok('infinite loop is stopped by the worker deadline');
+  await source('fnc main() -> int { return 42; }'+' '.repeat(70000));
   s=await run('error','E_SOURCE_LIMIT');
   assert.equal(s.downloadDisabled,true);
   ok('oversized source fails closed');
   await source('fnc main() -> int { return 6 * 7; }');
   await run('success','main() → 42');
   ok('recovery from syntax and runtime errors');
+  await source('fnc main() -> int {\n  return 41;\n}');
+  await js("(()=>{const e=document.querySelector('#source');e.focus();e.setSelectionRange(e.value.indexOf('return'),e.value.indexOf('return'));e.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true,cancelable:true}));})()");
+  assert.match((await view()).source,/\n    return 41;/);
+  await js("document.querySelector('#source').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true,cancelable:true}))");
+  s=await poll(async()=>{const x=await view();return x?.kind==='success'&&x.output?.includes('main() → 41')&&!x.runDisabled?x:null;},'keyboard shortcut Run');
+  ok('Tab indents and Ctrl+Enter invokes the real compiler and runtime');
   const shared='// 🚀 文字\nfnc main() -> int { return 29 + 13; }';
   await source(shared);
   await click('share');
@@ -168,7 +202,7 @@ try {
   assert.match(s.output,/main\(\) → 41/);
   ok('Stop cancels request and stale completion cannot clobber new run');
   await source('<img src=x onerror="window.__attoInjected=true">');
-  s=await run('error','E_TOKEN');
+  s=await run('error','E_TOPLEVEL');
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
   assert.ok(requests.some(r=>r.url.includes('/play/public/atto_compiler.wasm')));
