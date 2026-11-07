@@ -52,13 +52,28 @@ source and cannot claim five-backend conformance.
 
 ## Next integration: approved compiler-generated actor guest
 
-The separate AttoLang compiler PR #10 already lowers a narrow `define actor`
-with scalar `receive(int)->int` through typed IR to the v0 `receive(i64)->i64`
-export. Review and merge its dependency chain and then independently authorize
-and pin the compiler artifact before claiming the integrated playground executes
-AttoLang actor source. The playground browser E2E checks `E_ACTOR_ABI` when
-its current pinned compiler has no actor entry; once an authorized compiler is
-vendored, the same browser E2E runs a compiled source actor and verifies `41 → 42`.
+**Preferred compiler review sequence:** [consolidated compiler PR #15](https://github.com/atto-lang/atto-source.rs/pull/15)
+followed by [actor ABI PR #19](https://github.com/atto-lang/atto-source.rs/pull/19).
+PR #19 semantically integrates scalar `define actor` / `receive(int)->int`
+onto the same compiler tree as the corrected canonical semantics, nominal enum
+support and bounded class allocation. Its separate `compile_actor` export
+produces the v0 `receive(i64)->i64` guest. The older divergent compiler
+PR #10 and test PR #17 must **not** be merged as an independent competing
+stack on top of the consolidated implementation.
+
+After independent reviews and merges, obtain **separate approval to disclose**
+the exact compiler artifact before replacing the pinned bytes, receipt or SHA.
+The public site has an additional P0 administrator gate:
+[atto-lang.github.io issue #5](https://github.com/atto-lang/atto-lang.github.io/issues/5)
+documents a branch-source GitHub Pages publishing bypass that a checked-in
+manual-dispatch workflow alone cannot close. Pages publishing source,
+protected `main`, environment reviewers and negative live deployment tests
+must be verified by an administrator before release.
+
+Until these independent authorizations, the playground browser E2E correctly
+checks `E_ACTOR_ABI` against its existing old compiler instead of inventing
+actor support. Once an approved actor compiler is vendored, the same browser
+E2E must compile editor source and execute `send(41) → 42` in a real worker.
 Future release admission requires the exact source commit and tree, CI run, job,
 artifact ID, and the compiler artifact's SHA-256 to match the reviewed
 receipt and independently controlled release variables. The first actor-enabled
