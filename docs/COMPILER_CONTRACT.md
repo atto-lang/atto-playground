@@ -26,7 +26,7 @@ The compiler adds no syntax of its own:
 | Types | `int`, `bool` / `boolean`, `void` |
 | Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred |
 | Control flow | `if … then … elif … else … fi`, brace form closed by `fi`, `while … do … done`, `loop { }`, `for (let i = 0; i < n; i++)`, `break`, `continue` |
-| Expressions | `+ - * %`, `< <= > >=`, `eq neq == !=`, `!`, ternary, `,` / `\|` in conditions, `And` / `Or` / `Xor` |
+| Expressions | `+ - *`, `< <= > >=`, `eq neq == !=`, `!`, ternary, `,` / `\|` in conditions, `And` / `Or` / `Xor` |
 | Output | `stdio.print` / `stdio.println` of `int`, `bool` and string literals |
 
 Anything else is rejected with an `E_*` diagnostic, and a rejected program produces no artifact. That includes:
@@ -66,3 +66,7 @@ The earlier M0 guest restriction requiring exactly the type/function/export/code
 ## Declaration-only milestone and Wasm evidence
 
 The Rust compiler parses named class/actor/enum/struct/interface/trait definitions and preserves them in the versioned `atto.declarations.v1` WebAssembly custom section. Type-only compilation emits a pure no-op `main()` returning 0. This does **not** implement actor scheduling, actor-state isolation, class allocation, methods, enum operations, or tenant protection. `new`, `spawn`, inheritance and method bodies are rejected with explicit diagnostics; their effects are never simulated. Compiler ABI v2 and guest import caps are unchanged. Source: exact commit `f345a9d003836a338ca8a791ed50274177885eef` built by private browser-artifact CI, with declaration conformance and native parity. This is a release candidate only; public compilation must await the independent Pages publishing gate.
+
+### Corrected expression contracts
+
+The compiler rejects removed `%`, `^` and `^^` as `E_UNSUPPORTED` (no guest artifact). Conditional `,`/`|` are **eager**, left-to-right boolean operators: the right side is evaluated even if the left is decisive. The playground's prime/even examples use simple, bounded repeated subtraction instead of the removed remainder operator. Overflow remains checked. These semantics must hold for all declaration-aware compiler artifacts.

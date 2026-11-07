@@ -136,8 +136,11 @@ test('generated programs agree with expected arithmetic', async () => {
 });
 
 test('checked arithmetic panics with a language-level message', async () => {
-  let r = await run('fnc zero(): int { return 0; }\n' + main('  return 5 % zero();'));
-  assert.equal(r.message, 'E_PANIC: division by zero');
+  const removed = compiler.compile('fnc zero(): int { return 0; }\n' + main('  return 5 % zero();'));
+  assert.equal(removed.ok, false);
+  assert.match(removed.diagnostics[0].message, /^E_UNSUPPORTED/);
+  assert.equal('wasm' in removed, false);
+  let r;
   r = await run(main('  val m: int = -9223372036854775808;\n  return m - 1;'));
   assert.equal(r.message, 'E_PANIC: integer overflow');
   r = await run('fnc down(int n): int { return down(n + 1); }\n' + main('  return down(0);'));
@@ -218,4 +221,25 @@ test('real compiler emits typed top-level declarations in guest custom sections'
     assert.equal(compiled.ok,false);
     assert.equal('wasm' in compiled,false);
   }
+});
+
+
+test('removed arithmetic operators are rejected and both condition operands execute eagerly', async () => {
+  for (const op of ['%', '^', '^^']) {
+    const r=compiler.compile(main('  return 6 '+op+' 3;'));
+    assert.equal(r.ok,false,'removed operator '+op+' must fail');
+    assert.match(r.diagnostics[0].message,/^E_UNSUPPORTED/);
+    assert.equal('wasm' in r,false);
+  }
+  const result=await run([
+    'fnc rhs(): bool { stdio.println("rhs"); return true; }',
+    'pub fnc main(): int {',
+    '  if false, rhs() then return 1; fi',
+    '  if true | rhs() then',
+    '    return 42;',
+    '  fi',
+    '  return 7;',
+    '}'
+  ].join('\n'));
+  assert.deepEqual([result.ok,result.value,result.stdout],[true,42n,'rhs\nrhs\n']);
 });

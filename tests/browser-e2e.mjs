@@ -225,9 +225,10 @@ try {
   assert.equal(s.downloadDisabled,true);
   ok('syntax error rejected in UI');
   await source('fnc zero(): int { return 0; }\nfnc main() -> int { return 42 % zero(); }');
-  s=await run('error','E_PANIC: division by zero');
-  assert.match(s.bytes,/^\d+ bytes$/);
-  ok('runtime panic distinguished from compile error');
+  s=await run('error','E_UNSUPPORTED');
+  assert.equal(s.downloadDisabled,true);
+  assert.equal(s.bytes,'—');
+  ok('removed arithmetic operator is a compile error without a Wasm artifact');
   await example('overflow');
   s=await run('error','E_PANIC: integer overflow');
   assert.match(s.output,/4611686018427387904\nE_PANIC: integer overflow/);
