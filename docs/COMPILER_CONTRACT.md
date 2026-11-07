@@ -80,6 +80,13 @@ It does not change the existing `atto.browser.guest.v1` compiler ABI.
 
 The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only explicitly enumerated browser assets (HTML, CSS, JS, six examples, compiler receipt, compiler Wasm and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
 
+For any actor-enabled compiler release, `scripts/actor-release-gate.mjs`
+additionally requires its source SHA, exact tree SHA, GitHub CI run/job/artifact
+IDs, and CI artifact digest to match administrator-managed approval values.
+Ordinary pull-request CI never supplies these values and cannot authorize a
+new compiler binary. The source-owned artifact must still be independently
+reviewed for publication.
+
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v1` intentionally permits bounded stdout imports and memory for string literals. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
