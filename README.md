@@ -11,7 +11,7 @@ Requires Node 20 or later. Python 3 is optional, for the HTTP server. There are 
 ```sh
 npm run verify          # receipt digest, compiler ABI, examples, guests, worker tests
 npm run serve           # http://localhost:8080
-CHROME_BIN=... npm run test:e2e   # 16 real-browser scenarios under /play/
+CHROME_BIN=... npm run test:e2e   # 17 real-browser scenarios under /play/
 ```
 
 To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-source.rs`. It rebuilds the wasm and rewrites `public/atto_compiler.receipt.json` with the source head, tree, toolchain and sha256. CI fails if the shipped wasm does not match the receipt.
@@ -23,7 +23,7 @@ To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-sour
 - `src/compiler-worker.js`: disposable compilation worker with a 3-second deadline.
 - `src/runner-worker.js` and `src/guest.js`: a disposable guest worker. It grants only `atto.print_*`, caps stdout and maps panics to messages.
 - `examples/*.atto`: the example programs. Each one is checked against the Java reference compiler.
-- `src/app.js`, `src/editor.js`, `src/ui.js` and `index.html`: static UI with native editor, line numbers, indentation shortcuts, clickable diagnostics, accessible Console / Diagnostics / Wasm tabs, examples, artifact download and sharing.
+- `src/app.js` and `index.html`: the static UI, examples, Wasm download and share links.
 
 ## Deployment
 
@@ -32,4 +32,9 @@ Host this directory on any static host, with `.wasm` served as `application/wasm
 
 The full browser E2E suite checks a compiled 42 result, downloaded Wasm execution, stale-artifact invalidation on edits, mutable and immutable examples, syntax diagnostics, runtime traps, source limits, recovery, Unicode share-link reload, stop/restart cancellation, HTML-injection rejection and static-only HTTP traffic. It uses a disposable Chrome profile, an ephemeral DevTools port and a local static server. It is separate from the Node compiler test suite.
 
-Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The current Rust-based compiler accepts only the documented subset; promotion to canonical Atto frontend and typed IR requires compiler-backed parity evidence and independent review. CodeMirror 6 and multi-file projects are not part of this dependency-free UI upgrade.
+Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The current C bootstrap accepts only the documented M0 scalar subset; promotion to canonical Atto frontend and typed IR requires compiler-backed parity evidence and independent review.
+
+
+## Browser editor UI
+
+The accessible native editor provides a line gutter, line/column display, keyboard indentation, Ctrl/⌘+Enter to run, selectable diagnostics and Console/Diagnostics/Wasm tabs. Source code stays in the browser; output and downloaded Wasm are invalidated on edits. `src/editor.js` and `src/ui.js` are explicit required release assets and are covered by Node and Chromium E2E tests.

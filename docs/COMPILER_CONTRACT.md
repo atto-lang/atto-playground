@@ -6,6 +6,12 @@ The playground ships `public/atto_compiler.wasm`. It is built from [atto-lang/at
 - No JavaScript evaluates user source.
 - No LLVM runs in the page.
 
+## Integrity
+
+`scripts/vendor-compiler.sh` writes the compiler's SHA-256 and size to both the receipt and `src/compiler-pin.js`. The compiler worker fetches `atto_compiler.wasm?sha256=<prefix>`, so a cached copy from an older deploy is never reused. It then hashes the bytes and refuses to run a compiler that does not match the pin. The tests check the pin against the receipt and confirm that a one-bit change is rejected.
+
+A trap inside the compiler instance would leave its state undefined. `createCompiler` therefore refuses further calls on an instance that trapped, and the page uses a fresh compiler worker for every run anyway. The compiler's resource limits are listed in atto-source.rs `README.md` under "Resource limits". Each limit is a diagnostic, never a trap.
+
 ## Language subset
 
 The compiler adds no syntax of its own:
@@ -47,4 +53,12 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 - **Exports:** `main: () -> i64`, `panic_code: mut i32` (1 = integer overflow, 2 = division by zero), and `memory` only when string literals are printed.
 - **Imports:** only from module `atto`: `print_i64`, `print_bool`, `print_str` and `print_newline`. `src/guest.js` refuses any other import and caps stdout at 64 KiB.
 
-Each guest runs in a fresh worker with a 3-second deadline, which ends infinite loops. A browser worker is not OS-level isolation, so the host must never grant other imports.
+Each guest runs in a fresh worker with a 3-second deadline, which ends infinite loops. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
+
+## Static release and disclosure gate
+
+The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **18 enumerated browser assets** (HTML, CSS, JS, six examples, compiler receipt, compiler Wasm and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
+
+The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
+
+The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v1` intentionally permits bounded stdout imports and memory for string literals. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
