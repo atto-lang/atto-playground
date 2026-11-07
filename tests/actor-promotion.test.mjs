@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile, readFile, copyFile, rm, chmod } from 'node:fs/promises';
 import { join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -124,6 +125,22 @@ test('vendoring rejected actor compiler leaves old public bytes, receipt and pin
     const run=spawnSync('sh',[scriptPath,source],{encoding:'utf8',env,timeout:15000});
     assert.notEqual(run.status,0,'unapproved actor compiler must not vendor');
     assert.match(run.stderr + run.stdout,/E_ACTOR_RELEASE/);
+    for(const [file,body] of sentinels)assert.deepEqual(await readFile(file),body);
+    // Even complete SOURCE CI metadata (with the correct binary digest) is
+    // not public-disclosure authorization. Missing ATTO_PUBLIC_* values must
+    // reject the vendor promotion before touching any checked-in asset.
+    Object.assign(env, {
+      ATTO_ACTOR_CI_RUN_ID:'42403674399',
+      ATTO_ACTOR_CI_JOB_ID:'128496670673',
+      ATTO_ACTOR_CI_ARTIFACT_ID:'13586483051',
+      ATTO_ACTOR_CI_SHA256:createHash('sha256').update(bytes).digest('hex'),
+    });
+    for (const key of ['ATTO_PUBLIC_COMPILER_SHA256','ATTO_PUBLIC_ACTOR_SOURCE_HEAD',
+      'ATTO_PUBLIC_ACTOR_SOURCE_TREE','ATTO_PUBLIC_ACTOR_CI_RUN_ID',
+      'ATTO_PUBLIC_ACTOR_CI_JOB_ID','ATTO_PUBLIC_ACTOR_CI_ARTIFACT_ID']) delete env[key];
+    const blocked=spawnSync('sh',[scriptPath,source],{encoding:'utf8',env,timeout:15000});
+    assert.notEqual(blocked.status,0,'CI evidence alone must not promote a public actor binary');
+    assert.match(blocked.stderr+blocked.stdout,/E_ACTOR_DISCLOSURE/);
     for(const [file,body] of sentinels)assert.deepEqual(await readFile(file),body);
   } finally {
     await rm(temp,{recursive:true,force:true,maxRetries:3});
