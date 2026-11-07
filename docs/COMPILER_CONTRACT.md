@@ -33,7 +33,7 @@ Anything else is rejected with an `E_*` diagnostic, and a rejected program produ
 
 - `int / int`, whose result type is undecided (spec S-25)
 - strings as values, floats and sized integers
-- classes, actors, `match`, imports and lambdas
+- class instances, actor state, source-level spawn, `match`, imports and lambdas
 
 ## Compiler ABI v2
 
@@ -42,6 +42,11 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 - `abi_version()`, which returns 2
 - `memory`, `input_ptr()` and `input_capacity()` (64 KiB of UTF-8)
 - `compile(length)`, which returns 0 on success
+- Optional `compile_actor(length)` on separately reviewed newer compiler builds. It
+  emits an import-free `receive(i64)->i64` guest for the experimental actor worker
+  ABI `atto.browser.actor.scalar.v0`; **never** fallback to `compile` for actors.
+  The currently pinned compiler lacks this export; actor controls fail closed
+  with `E_ACTOR_ABI` until an approved, receipted Wasm is vendored.
 - `result_ptr()` and `result_length()`, which are 0 after an error
 - `error_ptr()`, a NUL-terminated `E_CODE: message`
 - `error_line_number()` and `error_column_number()`
@@ -67,7 +72,7 @@ It does not change the existing `atto.browser.guest.v1` compiler ABI.
 
 ## Static release and disclosure gate
 
-The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **18 enumerated browser assets** (HTML, CSS, JS, six examples, compiler receipt, compiler Wasm and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
+The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only explicitly enumerated browser assets (HTML, CSS, JS, six examples, compiler receipt, compiler Wasm and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
 
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
