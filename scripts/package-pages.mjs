@@ -4,6 +4,7 @@ import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
+import { FORMATTER_SHA256, FORMATTER_BYTES, FORMATTER_SOURCE_COMMIT } from '../src/formatter-pin.js';
 
 export const PAGES_ASSETS = Object.freeze([
   'index.html',
@@ -19,9 +20,14 @@ export const PAGES_ASSETS = Object.freeze([
   'src/program-picker.js',
   'src/saved-programs.js',
   'src/syntax-highlight.js',
+  'src/formatter-worker.js',
+  'src/formatter-runtime.js',
+  'src/formatter-pin.js',
   'src/compiler-pin.js',
   'public/atto_compiler.wasm',
   'public/atto_compiler.receipt.json',
+  'public/oreslang_format.wasm',
+  'public/oreslang_format.receipt.json',
   'docs/COMPILER_CONTRACT.md',
   'examples/conditions.atto',
   'examples/error.atto',
@@ -77,6 +83,20 @@ export async function packagePages({
       compiler.length !== COMPILER_BYTES ||
       createHash('sha256').update(compiler).digest('hex') !== receipt.compiler_sha256) {
     throw new Error('Compiler receipt, pinned digest or byte length does not match');
+  }
+  const formatter = files.find(x => x.name === 'public/oreslang_format.wasm').bytes;
+  const formatterReceipt = JSON.parse(files.find(x => x.name === 'public/oreslang_format.receipt.json').bytes.toString('utf8'));
+  if (formatterReceipt.schema !== 'atto.browser.formatter.vendor.v1' ||
+      formatterReceipt.source_head !== FORMATTER_SOURCE_COMMIT ||
+      formatterReceipt.wasm_sha256 !== FORMATTER_SHA256 ||
+      formatterReceipt.wasm_bytes !== FORMATTER_BYTES ||
+      formatter.length !== FORMATTER_BYTES ||
+      createHash('sha256').update(formatter).digest('hex') !== FORMATTER_SHA256) {
+    throw new Error('Formatter provenance, length or SHA-256 mismatch');
+  }
+  const fmtExports = WebAssembly.Module.exports(new WebAssembly.Module(formatter)).map(x => x.name);
+  for (const required of ['memory','oresfmt_alloc','oresfmt_free','oresfmt_format']) {
+    if (!fmtExports.includes(required)) throw new Error('Formatter Wasm missing '+required);
   }
   if (approvedCompilerSha256 !== null && (
       !/^[a-f0-9]{64}$/.test(approvedCompilerSha256) ||
