@@ -18,7 +18,10 @@ source and cannot claim five-backend conformance.
 - V0 forbids table, memory, element, data, data-count, tag and start sections.
   Future actor heaps will require a new ABI version with explicit bounded memory.
 - A browser message must be a signed i64 BigInt, structured-cloned, assigned a
-  monotonic sequence id, and processed synchronously by the worker.
+  *contiguous* sequence ID starting at 1, and processed synchronously by the
+  worker. Skipped/replayed IDs are rejected **before** guest invocation; the
+  host accepts results only in the same FIFO sequence. Out-of-order replies
+  terminate the actor and reject all outstanding sends.
 - Host admission is limited to 32 outstanding messages (configurable lower).
   Every message has a deadline (default 3 seconds). Any trap, timeout,
   unexpected response, malformed packet or worker failure **terminates that
