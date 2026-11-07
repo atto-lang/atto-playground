@@ -10,6 +10,12 @@ The playground ships `public/atto_compiler.wasm`. It is built from [atto-lang/at
 
 `scripts/vendor-compiler.sh` writes the compiler's SHA-256 and size to both the receipt and `src/compiler-pin.js`. The compiler worker fetches `atto_compiler.wasm?sha256=<prefix>`, so a cached copy from an older deploy is never reused. It then hashes the bytes and refuses to run a compiler that does not match the pin. The tests check the pin against the receipt and confirm that a one-bit change is rejected.
 
+The release packager checks the exact compiler export surface against the
+receipt's optional `actor_abi: "atto.browser.actor.scalar.v0"` claim. This
+field is present **only** if the binary has a real `compile_actor` export;
+missing/forged claims reject packaging. Releasing new compiler bytes still
+requires separately authorized source provenance and public disclosure.
+
 A trap inside the compiler instance would leave its state undefined. `createCompiler` therefore refuses further calls on an instance that trapped, and the page uses a fresh compiler worker for every run anyway. The compiler's resource limits are listed in atto-source.rs `README.md` under "Resource limits". Each limit is a diagnostic, never a trap.
 
 ## Language subset
