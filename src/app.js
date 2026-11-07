@@ -242,7 +242,7 @@ async function sendActor() {
   try {
     const result = await handle.send(value);
     if (generation !== runGeneration || actorHandle !== handle) return;
-    actorTranscript = (actorTranscript + `receive(${value}) → ${result}\\n`).slice(-4096);
+    actorTranscript = (actorTranscript + `receive(${value}) → ${result}\n`).slice(-4096);
     status.textContent = 'Actor responded';
     display(actorTranscript, 'success');
   } catch (error) {
