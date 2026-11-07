@@ -23,25 +23,28 @@ const server = createServer(async (req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const serverPort = server.address().port;
 const userDir = await mkdtemp(join(tmpdir(), 'atto-chrome-'));
+const debuggerPort = 9222;
 const chrome = spawn(process.env.CHROME_BIN || 'chromium', [
   '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
   '--disable-background-networking', '--no-first-run', '--no-proxy-server',
-  '--remote-debugging-port=0', `--user-data-dir=${userDir}`, 'about:blank'
+  `--remote-debugging-port=${debuggerPort}`, `--user-data-dir=${userDir}`, 'about:blank'
 ], {stdio:['ignore','ignore','pipe']});
 let chromeLog='';
 chrome.stderr.on('data', chunk => {chromeLog=(chromeLog+chunk.toString()).slice(-3000);});
 chrome.on('error', err => {chromeLog += String(err);});
 const sleep = ms => new Promise(resolve => setTimeout(resolve,ms));
 async function waitForPort(){
-  for(let i=0;i<100;i++){
-    try {const contents=await readFile(join(userDir,'DevToolsActivePort'),'utf8');
-      const port=Number(contents.split('\n')[0]); if(port>0)return port;
+  for(let i=0;i<300;i++){
+    try {
+      const response=await fetch(`http://127.0.0.1:${debuggerPort}/json/list`,{signal:AbortSignal.timeout(900)});
+      if(response.ok)return debuggerPort;
     }catch{}
     if(chrome.exitCode!==null)throw new Error(`Chrome exited: ${chromeLog}`);
     await sleep(100);
   }
-  throw new Error(`Chrome DevTools port not established: ${chromeLog}`);
+  throw new Error(`Chrome DevTools endpoint not reachable: ${chromeLog}`);
 }
+
 function timeout(promise, ms, label){
   let timer;
   return Promise.race([promise,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error(`${label} timed out`)),ms);})]).finally(()=>clearTimeout(timer));
