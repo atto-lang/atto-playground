@@ -35,3 +35,8 @@ A guest may import only the `atto.print_*` output functions, and stdout is cappe
 5. Verify the actual HTTPS URL and its `public/atto_compiler.wasm` content type and digest before linking it publicly.
 
 A public `atto-lang.github.io/play/` route is being prepared separately. Do not copy the private compiler to a public repository as a workaround without the same explicit binary-disclosure approval and review.
+
+
+### Required GitHub administration before the first public release
+
+Protect `main` against unreviewed changes and configure the `github-pages` environment with **required reviewers** in the repository Settings. Independent reviewers must approve the exact compiler-vendor commit and binary SHA-256. Restrict who can change `ATTO_PUBLIC_COMPILER_SHA256`; the variable alone does not prove independent review. Do not dispatch the public release until those controls and GitHub Pages hosting eligibility are verified by a repository administrator. The static site is not an OS security sandbox.

@@ -14,6 +14,8 @@ export const PAGES_ASSETS = Object.freeze([
   'src/runner-worker.js',
   'src/guest.js',
   'src/worker-task.js',
+  'src/editor.js',
+  'src/ui.js',
   'src/compiler-pin.js',
   'public/atto_compiler.wasm',
   'public/atto_compiler.receipt.json',
