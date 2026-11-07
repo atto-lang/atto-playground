@@ -256,6 +256,19 @@ try {
   s=await run('error','E_TOPLEVEL');
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
+  // Explicit actor source-to-worker bridge rejects before guest execution
+  // while the currently pinned compiler lacks compile_actor. Future approved
+  // pins should make the same input runnable instead of silently erasing it.
+  await source('define actor Worker as receive(int value): int { return value + 2; } end');
+  await click('actor-start');
+  const actorStatus=await poll(async()=>{
+    const state=await js("({text:document.querySelector('#actor-result').textContent,stop:document.querySelector('#actor-stop').disabled})");
+    return state?.text?.includes('E_UNSUPPORTED_ACTOR') && state.stop ? state : null;
+  },'actor compiler capability rejection');
+  assert.match(actorStatus.text,/E_UNSUPPORTED_ACTOR/);
+  assert.equal(await js("document.querySelector('#actor-send').disabled"),true);
+  ok('actor UI explicitly refuses to execute source without approved actor-capable compiler');
+
   // Execute real Web Workers with separate Wasm instances and FIFO i64 messages.
   // The fixture is hand-assembled Wasm, not yet AttoLang actor source lowering.
   const actorProbe=await js(`(async()=>{

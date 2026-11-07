@@ -6,6 +6,12 @@ const COMPILER_URL = new URL(`../public/atto_compiler.wasm?sha256=${COMPILER_SHA
 let compilerPromise;
 self.onmessage = async ({ data }) => {
   try {
+    const mode = data?.mode ?? 'main';
+    if (!['main', 'actor'].includes(mode) || typeof data?.source !== 'string') {
+      self.postMessage({ ok: false, diagnostics: [{ line: 1, column: 1,
+        message: 'E_COMPILER_REQUEST: invalid source or compiler mode' }] });
+      return;
+    }
     if (!compilerPromise) {
       compilerPromise = fetch(COMPILER_URL, { cache: 'force-cache', credentials: 'omit' })
         .then(async response => {
@@ -16,7 +22,7 @@ self.onmessage = async ({ data }) => {
         });
     }
     const compiler = await compilerPromise;
-    const compiled = compiler.compile(data.source);
+    const compiled = mode === 'actor' ? compiler.compileActor(data.source) : compiler.compile(data.source);
     if (compiled.ok) {
       self.postMessage({ ok: true, wasm: compiled.wasm }, [compiled.wasm.buffer]);
     } else {

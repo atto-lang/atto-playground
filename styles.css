@@ -38,3 +38,13 @@
 .syntax-layer .tok-function{color:#8bbbff}
 .syntax-layer .tok-operator{color:#f7a2cb}
 @media(max-width:850px){.editor-input-wrap{min-height:310px}.editor-surface .editor-input-wrap textarea{min-height:310px}.program-controls{justify-content:flex-start}}
+
+/* Experimental actor controls are intentionally separate from scalar main(). */
+.actor-tools { margin: 1.5rem 0; padding: 1.25rem; border: 1px solid var(--border, #374151); border-radius: 12px; }
+.actor-tools h2 { margin: 0 0 .5rem; font-size: 1.1rem; }
+.actor-tools h2 small { font-weight: 400; font-size: .75rem; opacity: .7; }
+.actor-tools p { line-height: 1.5; }
+.actor-tools .controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; }
+.actor-tools label { display: inline-flex; gap: .5rem; align-items: center; }
+.actor-tools input { width: 13rem; max-width: 100%; }
+#actor-result { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow-y: auto; }

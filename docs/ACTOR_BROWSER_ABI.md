@@ -45,3 +45,20 @@ source-level error/ownership rules. Add compiler-produced Wasm, not hand-built
 fixture, as browser E2E and enforce exact compiler head/tree/receipt provenance.
 Then extend to typed messages, sealed state, mailbox lifecycle, supervision,
 actor groups and backend parity. Never silently erase actor members.
+
+## Playground source-to-worker integration (staged, not publicly released)
+
+The source UI bridge supports an explicit **Compile & start actor** action. It
+sends actor source to the pinned Rust compiler worker with mode `actor`, invokes
+`compile_actor` when exported, validates the generated guest against
+`atto.browser.actor.scalar.v0`, and launches one Web Worker per actor.
+Messages use strict decimal signed-i64 input and are sent as structured-cloned
+BigInts. Editing source or pressing Stop invalidates the generation and
+terminates the old worker; late responses cannot install an outdated actor.
+
+**Release constraint:** the currently pinned compiler predates `compile_actor`.
+The bridge must return `E_UNSUPPORTED_ACTOR` with **no artifact** until a
+compiler built from reviewed exact-head actor-source code is separately
+provenanced, digest-pinned and approved for publication. Do not infer actor
+support from an inert `define actor` declaration or from the source-free
+counter tests. Browser workers are not a security boundary between tenants.

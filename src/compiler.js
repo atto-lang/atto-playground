@@ -31,10 +31,13 @@ export async function createCompiler(compilerBytes) {
   // A trap inside the compiler leaves its internal state undefined, so an
   // instance that trapped once is never used again.
   let poisoned = null;
-  return {
-    compile(source) {
+  function compileMode(source, actor) {
       if (poisoned) throw new Error(`Compiler instance unusable after an internal fault (${poisoned})`);
       if (typeof source !== 'string') throw new TypeError('source must be a string');
+      if (actor && typeof api.compile_actor !== 'function') {
+        return { ok: false, diagnostics: [{ line: 1, column: 1,
+          message: 'E_UNSUPPORTED_ACTOR: pinned compiler does not expose compile_actor; no actor Wasm was generated' }] };
+      }
       const bytes = encoder.encode(source);
       if (bytes.length > capacity) {
         return { ok: false, diagnostics: [{ line: 1, column: 1, message: `E_SOURCE_LIMIT: source exceeds ${capacity} UTF-8 bytes` }] };
@@ -43,7 +46,7 @@ export async function createCompiler(compilerBytes) {
       if (pointer < 0 || pointer + bytes.length >= api.memory.buffer.byteLength) throw new Error('Compiler input memory bounds violated');
       new Uint8Array(api.memory.buffer, pointer, bytes.length).set(bytes);
       let status;
-      try { status = api.compile(bytes.length); }
+      try { status = actor ? api.compile_actor(bytes.length) : api.compile(bytes.length); }
       catch (error) { poisoned = error.message; throw new Error(`Compiler internal fault: ${error.message}`); }
       if (status !== 0) {
         const diagnostic = {
@@ -62,6 +65,10 @@ export async function createCompiler(compilerBytes) {
       const wasm = new Uint8Array(api.memory.buffer, outPtr, length).slice();
       if (!WebAssembly.validate(wasm)) throw new Error('Compiler emitted invalid WebAssembly');
       return { ok: true, wasm, diagnostics: [] };
-    }
-  };
+  }
+  return Object.freeze({
+    compile: source => compileMode(source, false),
+    compileActor: source => compileMode(source, true),
+    hasActorCompiler: typeof api.compile_actor === 'function',
+  });
 }

@@ -9,6 +9,7 @@
   <title>AttoLang Playground · Source → Wasm</title>
   <link rel="stylesheet" href="./styles.css">
   <script type="module" src="./src/app.js"></script>
+  <script type="module" src="./src/actor-playground.js"></script>
 </head>
 <body>
   <header class="topbar">
@@ -38,6 +39,17 @@
         <div class="info"><span>Target <strong>wasm32-browser</strong></span><span>Artifact <strong id="bytes">—</strong></span></div>
         <div class="controls"><button class="primary" id="run" type="button">▶ Run program</button><button id="format" type="button" title="Canonical Rust formatter (Alt+Shift+F)">Format</button><button id="check-format" type="button" title="Check formatting without editing code">Check format</button><button id="stop" type="button" disabled>Stop</button><button id="download" type="button" disabled>↓ Wasm</button><button id="share" type="button">Share ↗</button></div>
       </div>
+    </section>
+    <section class="actor-tools" aria-label="Experimental Web Worker actors">
+      <h2>Browser actors <small>experimental scalar receive ABI</small></h2>
+      <p>Paste a <code>define actor Worker as receive(int value): int { ... } end</code> declaration above. Compile it to Wasm, then run it in its own Web Worker. Full <code>spawn</code>, actor state, typed messaging, supervision and per-actor memory are not supported here yet. Requires a separately approved actor-capable compiler binary.</p>
+      <div class="controls">
+        <label for="actor-message">Message (signed i64) <input id="actor-message" type="text" inputmode="numeric" value="40" maxlength="21" autocomplete="off"></label>
+        <button id="actor-start" type="button">Compile &amp; start actor</button>
+        <button id="actor-send" type="button" disabled>Send message</button>
+        <button id="actor-stop" type="button" disabled>Stop actor</button>
+      </div>
+      <pre id="actor-result" aria-live="polite">No actor running.</pre>
     </section>
     <div class="bottom"><div><span class="bullet"></span><span id="status">Ready</span></div><span>Compiled on-device, no remote execution · <a href="./docs/COMPILER_CONTRACT.md">Supported subset</a></span></div>
     <section class="footnote"><h2>Real compiler. Explicit scope.</h2><p>The playground compiles a subset of AttoLang, not the full language. It supports functions, recursion, <code>int</code> (checked 64-bit) and <code>bool</code>, <code>val</code>/<code>const</code>/<code>let</code> bindings, <code>if … then … fi</code>, <code>while … do … done</code>, <code>for</code>, <code>loop</code>, and <code>stdio.println</code>. Syntax follows the reference compiler. Classes, actors, strings as values, floats, <code>match</code> and imports are not lowered yet and produce compiler errors. A failed compilation never produces a guest Wasm artifact.</p></section>
