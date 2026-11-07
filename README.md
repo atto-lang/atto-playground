@@ -16,7 +16,7 @@ npm run serve
 
 `npm test` executes the compiler's actual Wasm binary under Node's WebAssembly VM, validates emitted modules, executes scalar guest values, checks immutable/mutable declaration rules, tests 100 distinct generated programs, and validates source/compiler failures.
 
-For headless browser smoke (when Chromium is installed): `npm run test:browser`.
+For the full real Chromium UI suite (when Chromium is installed): `npm run test:e2e`. The original focused smoke test remains `npm run test:browser`. The E2E suite serves the deployment-shaped `/play/` path and clicks the actual editor controls.
 
 ## Architecture
 
@@ -32,3 +32,8 @@ For headless browser smoke (when Chromium is installed): `npm run test:browser`.
 ## Deployment
 
 Host this directory on any static host, with `.wasm` served as `application/wasm`, strong CSP headers, and no user-controlled backend execution. For a domain like `play.attolang.org`, use a CNAME/host mapping managed by the website owner. The main language website can link directly to the playground. CI checks the compiler regeneration and Node tests; a green run must have nonzero executed job steps.
+## E2E release gate
+
+The full browser E2E suite checks a compiled 42 result, downloaded Wasm execution, stale-artifact invalidation on edits, mutable and immutable examples, syntax diagnostics, runtime traps, source limits, recovery, Unicode share-link reload, stop/restart cancellation, HTML-injection rejection and static-only HTTP traffic. It uses a disposable Chrome profile, an ephemeral DevTools port and a local static server. It is separate from the Node compiler test suite.
+
+Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The current C bootstrap accepts only the documented M0 scalar subset; promotion to canonical Atto frontend and typed IR requires compiler-backed parity evidence and independent review.
