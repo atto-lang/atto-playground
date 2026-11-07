@@ -256,6 +256,36 @@ try {
   s=await run('error','E_TOPLEVEL');
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
+  // Execute real Web Workers with separate Wasm instances and FIFO i64 messages.
+  // The fixture is hand-assembled Wasm, not yet AttoLang actor source lowering.
+  const actorProbe=await js(`(async()=>{
+    const {spawnWasmActor}=await import('/play/src/actor-runtime.js');
+    const bytes=Uint8Array.from(${JSON.stringify(Array.from(COUNTER_WASM))});
+    const a=await spawnWasmActor(bytes);
+    const b=await spawnWasmActor(bytes);
+    const values=await Promise.all([a.send(40n),a.send(2n)]);
+    const isolated=await b.send(7n);
+    let invalid=false;
+    try { await a.send(1); } catch (e) { invalid=/signed i64/.test(e.message); }
+    a.close();
+    let closed=false;
+    try { await a.send(1n); } catch (e) { closed=/E_ACTOR_CLOSED/.test(e.message); }
+    b.close();
+    return {values:values.map(String),isolated:String(isolated),invalid,closed};
+  })()`);
+  assert.deepEqual(actorProbe,{values:['40','42'],isolated:'7',invalid:true,closed:true});
+  ok('dedicated Web Workers execute real stateful Wasm actor messages with FIFO, isolation and closure');
+
+  const timeoutProbe=await js(`(async()=>{
+    const {spawnWasmActor}=await import('/play/src/actor-runtime.js');
+    const actor=await spawnWasmActor(Uint8Array.from(${JSON.stringify(Array.from(LOOP_WASM))}),{timeoutMs:100});
+    let timeout=false;
+    try { await actor.send(1n); } catch (e) { timeout=/E_ACTOR_TIMEOUT/.test(e.message); }
+    return {timeout,closed:actor.closed};
+  })()`);
+  assert.deepEqual(timeoutProbe,{timeout:true,closed:true});
+  ok('non-cooperative guest Wasm is terminated by worker deadline');
+
   assert.ok(requests.some(r=>r.url.includes('/play/public/atto_compiler.wasm')));
   assert.ok(requests.every(r=>r.method==='GET'),'Unexpected server-side submission of code');
   ok('compiler Wasm served as static GET, no source POST');
