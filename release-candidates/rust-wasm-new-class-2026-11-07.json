@@ -4,9 +4,9 @@
   "publish_authorized": false,
   "source_repository": "atto-lang/atto-source.rs",
   "source_pull_request": 15,
-  "source_head": "77f9a678e16a9c97758898efe084ac25def9fe56",
-  "source_tree": "a2027f4c74bcb6c14fb1d16757918f1cc6e115aa",
-  "ci_run_id": 42409518848,
+  "source_head": "e0ef984511ae0934d10ecf49284cad77d8861b2c",
+  "source_tree": "9cfdaf877f76f47de6216ed89ee29dc801d78b4e",
+  "ci_run_id": 42410801241,
   "ci_success": true,
   "ci_executed_steps": 13,
   "compiler_abi": "atto-playground-v2",
@@ -14,10 +14,10 @@
   "target": "wasm32-unknown-unknown",
   "compiler_bytes": 179634,
   "compiler_sha256": "bc86a7003aba50fc922f478a347e8ee921a3b016a2ca21ba8a3f3a84f5e0c4a6",
-  "compiler_artifact_id": 13588658687,
+  "compiler_artifact_id": 13589725767,
   "conformance_passed": 148,
   "native_wasm_byte_parity_passed": 106,
-  "chromium_scenarios_passed": 10,
+  "chromium_scenarios_passed": 15,
   "java_differential": "NOT_EXECUTED",
   "canonical_backend_parity": "UNPROVEN",
   "public_pages_issue": "https://github.com/atto-lang/atto-lang.github.io/issues/5",
@@ -29,6 +29,6 @@
     "exact bytes and receipt digest verified at public staging",
     "manual approved release and HTTPS acceptance"
   ],
-  "note": "Private review-only candidate re-pinned to compiler PR #15 after exact-tree reconciliation with canonical-semantics main (source head 77f9a678e16a9c97758898efe084ac25def9fe56). Real guest tests 148/148 and native/Wasm 106 parity passed on CI #42409518848. Compiler Wasm digest remains byte-identical; archive SHA256 is separately named. No public compiler bytes, deployed compiler pin, release permission, or Pages settings changed.",
-  "compiler_archive_sha256": "c7fe6b3c69ffdc1910713bd5e5b50dc006b7aab6a67d761a5cdd1e1dcc5a90f5"
+  "note": "Private review-only candidate re-pinned to exact source compiler PR #15 head e0ef984511ae0934d10ecf49284cad77d8861b2c, tree 9cfdaf877f76f47de6216ed89ee29dc801d78b4e. Source CI #42410801241 passed 148/148 guest conformance, 106 native/Wasm byte-parity and 15 real Chromium browser scenarios including user-reported define class Point/new Point() returning 42, bare Point() E_NEW_REQUIRED and negative field access. Compiler Wasm bytes remained byte-identical (179634 bytes, unchanged SHA-256); uploaded ZIP digest is separate. No public compiler bytes, deployed pin, release authorization, or Pages settings changed.",
+  "compiler_archive_sha256": "b625f3964acd8905370a72d8073848713f17edf71780d247f492aadb5558e624"
 }
