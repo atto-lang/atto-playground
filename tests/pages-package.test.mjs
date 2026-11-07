@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { packagePages, PAGES_ASSETS } from '../scripts/package-pages.mjs';
+import { packagePages, PAGES_ASSETS, STAGING_COMPILER_BASELINE, assertCompilerStagingAuthorization } from '../scripts/package-pages.mjs';
 
 const releaseWasm = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
 async function fixture(t) {
@@ -83,6 +83,42 @@ test('fails closed when compiler receipt/pin disagree or approval is absent', as
   receipt.compiler_sha256 = '0'.repeat(64);
   await writeFile(receiptPath, JSON.stringify(receipt));
   await assert.rejects(packagePages({ root }), /Compiler receipt, pinned digest or byte length does not match/);
+});
+
+test('unapproved compiler changes cannot enter ordinary Pages staging, including forged provenance', async t => {
+  const receipt = JSON.parse(await readFile(new URL('../public/atto_compiler.receipt.json', import.meta.url), 'utf8'));
+  assert.deepEqual(Object.keys(STAGING_COMPILER_BASELINE).sort(),
+    ['source_repository', 'source_head', 'source_tree', 'compiler_sha256', 'compiler_bytes'].sort());
+  assert.doesNotThrow(() => assertCompilerStagingAuthorization(receipt),
+    'unchanged reviewed baseline may still run unpublished CI staging');
+  const changes = [
+    ['source_head', '0'.repeat(40)],
+    ['source_tree', '0'.repeat(40)],
+    ['compiler_sha256', '0'.repeat(64)],
+    ['compiler_bytes', receipt.compiler_bytes + 1],
+  ];
+  for (const [key, value] of changes) {
+    assert.throws(
+      () => assertCompilerStagingAuthorization({ ...receipt, [key]: value }),
+      /Compiler update requires independently authorized public-disclosure approval before staging/,
+      key + ' must not silently update without external authorization'
+    );
+  }
+  assert.throws(() => assertCompilerStagingAuthorization({ ...receipt, source_head: 'not-a-sha' }),
+    /lacks valid exact source\/digest provenance/);
+  assert.throws(() => assertCompilerStagingAuthorization({ ...receipt, source_repository: 'untrusted/repo' }),
+    /lacks valid exact source\/digest provenance/);
+  assert.throws(() => assertCompilerStagingAuthorization(receipt, 'f'.repeat(64)),
+    /lacks matching public-disclosure approval/);
+  assert.doesNotThrow(() => assertCompilerStagingAuthorization(
+    { ...receipt, source_head: '0'.repeat(40) }, receipt.compiler_sha256
+  ), 'explicit matching release approval is a necessary downstream gate, not proof of independent authorization');
+
+  const root = await fixture(t);
+  const receiptPath = join(root, 'public/atto_compiler.receipt.json');
+  await writeFile(receiptPath, JSON.stringify({ ...receipt, source_head: '0'.repeat(40) }));
+  await assert.rejects(packagePages({ root }), /requires independently authorized public-disclosure approval/);
+  await assert.rejects(readdir(join(root, '_site')), /ENOENT/);
 });
 
 test('Pages staging path cannot be a symlink', async t => {
