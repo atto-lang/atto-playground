@@ -93,7 +93,18 @@ try {
   console.log('PASS: Chromium rejected immutable reassignment with no Wasm artifact');
 } finally {
   try{ws?.close();}catch{}
-  chrome.kill('SIGKILL');
+  // Chromium can still write into its profile after kill(). Wait for exit,
+  // then retry disposal of the isolated temporary directory if needed.
+  let exited = chrome.exitCode !== null;
+  const exitPromise = new Promise(resolve => chrome.once('exit', () => { exited = true; resolve(); }));
+  if (!exited) {
+    chrome.kill('SIGTERM');
+    await Promise.race([exitPromise, sleep(1200)]);
+  }
+  if (!exited) {
+    chrome.kill('SIGKILL');
+    await Promise.race([exitPromise, sleep(1200)]);
+  }
   server.close();
-  await rm(userDir,{recursive:true,force:true});
+  await rm(userDir,{recursive:true,force:true,maxRetries:12,retryDelay:200});
 }
