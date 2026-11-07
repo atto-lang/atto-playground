@@ -95,3 +95,25 @@ test('runtime divide-by-zero is trapped, never a compiler bypass', async () => {
   const { instance } = await WebAssembly.instantiate(r.wasm, {});
   assert.throws(() => instance.exports.main(), WebAssembly.RuntimeError);
 });
+
+test('initializers cannot silently read zero-initialized Wasm local slots', async () => {
+  for (const statement of ['int x = x;', 'const x = x + 1;', 'let int x = x;']) {
+    const result = compile(`${statement} return 42;`);
+    assert.equal(result.ok, false, statement);
+    assert.match(result.diagnostics[0].message, /E_UNBOUND/, statement);
+    assert.equal('wasm' in result, false, statement);
+  }
+  assert.equal(await run(compile('int x = 40; int y = x + 2; return y;')), 42);
+});
+test('deeply nested expressions fail closed and recover without stack overflow', async () => {
+  for (const [open, close] of [['(', ')'], ['-', '']]) {
+    const nested = open.repeat(140) + '1' + close.repeat(140);
+    const result = compile('return ' + nested + ';');
+    assert.equal(result.ok, false);
+    assert.match(result.diagnostics[0].message, /E_NESTING_LIMIT/);
+    assert.equal('wasm' in result, false);
+  }
+  const allowed = '('.repeat(32) + '42' + ')'.repeat(32);
+  assert.equal(await run(compile('return ' + allowed + ';')), 42);
+  assert.equal(await run(compile('return 6 * 7;')), 42);
+});

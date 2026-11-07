@@ -1,3 +1,4 @@
+import { createWorkerTask } from './worker-task.js';
 const samples = {
   arithmetic: `// AttoLang · integer arithmetic\nfnc main() -> int {\n  const int x = 6;\n  int y = 7;\n  return x * y;\n}`,
   immutable: `// Immutable by default: const is optional\nfnc main() -> int {\n  int x = 7;\n  const y = 5;\n  const int z = 3;\n  return x * y + z;\n}`,
@@ -16,9 +17,9 @@ const diagnostics = document.querySelector('#diagnostics');
 const status = document.querySelector('#status');
 const bytesLabel = document.querySelector('#bytes');
 let working = false;
-let activeWorker = null;
+const workerTask = createWorkerTask();
+let runGeneration = 0;
 let lastWasm = null;
-let cancelled = false;
 
 function display(message, kind = 'neutral') {
   output.textContent = message;
@@ -32,28 +33,9 @@ function setRunning(value) {
   editor.readOnly = value;
   status.textContent = value ? 'Compiling' : 'Ready';
 }
-function workerRequest(filename, payload, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL(filename, import.meta.url), { type: 'module' });
-    activeWorker = worker;
-    let done = false;
-    const finish = (error, result) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      worker.terminate();
-      if (activeWorker === worker) activeWorker = null;
-      if (error) reject(error); else resolve(result);
-    };
-    const timer = setTimeout(() => finish(new Error('Execution deadline exceeded')), timeoutMs);
-    worker.onmessage = event => finish(null, event.data);
-    worker.onerror = () => finish(new Error('Worker failed to load or execute'));
-    worker.postMessage(payload);
-  });
-}
 async function run() {
   if (working) return;
-  cancelled = false;
+  const generation = ++runGeneration;
   setRunning(true);
   lastWasm = null;
   downloadButton.disabled = true;
@@ -62,8 +44,8 @@ async function run() {
   display('Compiling Atto source inside WebAssembly…');
   try {
     const start = performance.now();
-    const compiled = await workerRequest('./compiler-worker.js', { source: editor.value }, 3000);
-    if (cancelled) return;
+    const compiled = await workerTask.request(new URL('./compiler-worker.js', import.meta.url), { source: editor.value }, 3000);
+    if (generation !== runGeneration) return;
     if (!compiled.ok) {
       const first = compiled.diagnostics[0];
       diagnostics.textContent = `${first.line}:${first.column} ${first.message}`;
@@ -74,22 +56,22 @@ async function run() {
     bytesLabel.textContent = `${lastWasm.byteLength} bytes`;
     downloadButton.disabled = false;
     status.textContent = 'Executing';
-    const executed = await workerRequest('./runner-worker.js', { wasm: lastWasm }, 3000);
-    if (cancelled) return;
+    const executed = await workerTask.request(new URL('./runner-worker.js', import.meta.url), { wasm: lastWasm }, 3000);
+    if (generation !== runGeneration) return;
     if (!executed.ok) {
       display(executed.message, 'error');
       return;
     }
     display(`main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms`, 'success');
   } catch (error) {
-    if (!cancelled) display(`E_HOST: ${error.message}`, 'error');
-  } finally { setRunning(false); }
+    if (generation === runGeneration) display(`E_HOST: ${error.message}`, 'error');
+  } finally { if (generation === runGeneration) setRunning(false); }
 }
 function stop() {
   if (!working) return;
-  cancelled = true;
-  activeWorker?.terminate();
-  activeWorker = null;
+  // Invalidate the old run before resolving its pending worker request.
+  runGeneration++;
+  workerTask.cancel();
   setRunning(false);
   display('Compilation or execution cancelled.', 'neutral');
 }

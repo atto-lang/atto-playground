@@ -13,7 +13,7 @@ term = atom, { ("*"|"/"), atom } ;
 atom = integer | identifier | "(", expression, ")" | "-", atom ;
 ```
 
-An unprefixed declaration must begin with `int`; `const x`, `const int x`, `int x` are immutable aliases. `let`/`mut` makes the binding reassignable. One `main` entrypoint, zero parameters, scalar signed i32 return, at most 64 locals. Division uses signed truncating Wasm `i32.div_s`; division by zero traps. Arithmetic overflow currently uses Wasm i32 wrapping, which is an explicit **experimental playground subset choice**, not a claim of canonical AttoLang overflow semantics. Numbers are restricted to 0…2147483647 before unary negation. There is no automatic type coercion.
+An unprefixed declaration must begin with `int`; `const x`, `const int x`, `int x` are immutable aliases. `let`/`mut` makes the binding reassignable. One `main` entrypoint, zero parameters, scalar signed i32 return, at most 64 locals and at most 128 nested expression levels. Initializers cannot reference the variable being declared. Division uses signed truncating Wasm `i32.div_s`; division by zero traps. Arithmetic overflow currently uses Wasm i32 wrapping, which is an explicit **experimental playground subset choice**, not a claim of canonical AttoLang overflow semantics. Numbers are restricted to 0…2147483647 before unary negation. There is no automatic type coercion.
 
 No imports, arbitrary functions, floats, strings, actors, allocation, loops, file/network access, GPU, or general control flow. Unsupported syntax fails closed. The compiler module has no imports and a bounded 1 MiB memory. Generated guest modules contain only `main: () -> i32`, no imports, no memory, and no start section.
 

@@ -9,6 +9,7 @@
 #define OUTPUT_LIMIT 16384
 #define CODE_LIMIT 8192
 #define MAX_LOCALS 64
+#define MAX_EXPR_NESTING 128
 
 typedef struct { unsigned char *data; int used, cap; } Buffer;
 typedef struct { const char *name; int length, mutable; } Local;
@@ -28,7 +29,7 @@ static int output_length, error_line, error_column;
 static int input_length, cursor, cursor_line, cursor_column;
 static Token tok;
 static Local locals[MAX_LOCALS];
-static int locals_length;
+static int locals_length, expr_depth;
 static Buffer body;
 
 static void message(const char *s) {
@@ -148,9 +149,19 @@ static void atom(void) {
     if(i<0){message("E_UNBOUND: variable not declared");return;}
     put(&body,0x20);uleb(&body,(uint32_t)i);next();return;
   }
-  if(tok.type==T_LPAREN){next();expression();expect(T_RPAREN,"E_PAREN: expected ')'");return;}
+  if(tok.type==T_LPAREN){
+    if(expr_depth>=MAX_EXPR_NESTING){message("E_NESTING_LIMIT: expression nesting exceeds limit");return;}
+    expr_depth++;
+    next();expression();expect(T_RPAREN,"E_PAREN: expected ')'");
+    expr_depth--;
+    return;
+  }
   if(tok.type==T_MINUS){
-    next(); put(&body,0x41);sleb(&body,0);atom();put(&body,0x6b);return;
+    if(expr_depth>=MAX_EXPR_NESTING){message("E_NESTING_LIMIT: expression nesting exceeds limit");return;}
+    expr_depth++;
+    next();put(&body,0x41);sleb(&body,0);atom();put(&body,0x6b);
+    expr_depth--;
+    return;
   }
   message("E_EXPRESSION: expected integer, variable or parenthesized expression");
 }
@@ -175,13 +186,15 @@ static void declaration(void){
   Token name=tok;
   if(lookup(&name)>=0){message("E_DUPLICATE: duplicate variable");return;}
   if(locals_length>=MAX_LOCALS){message("E_LOCALS_LIMIT: too many variables");return;}
-  int index=locals_length++;
+  /* An initializer cannot read the not-yet-defined local (Wasm defaults locals to zero). */
+  int index=locals_length;
   locals[index].name=input+name.start;locals[index].length=name.length;
   locals[index].mutable=mutable;
   next();
   if(!expect(T_EQ,"E_DECL: expected '='"))return;
   expression();
   if(!expect(T_SEMI,"E_SEMICOLON: expected ';'"))return;
+  locals_length++;
   put(&body,0x21);uleb(&body,(uint32_t)index);
 }
 static void assignment(void){
@@ -232,7 +245,7 @@ __attribute__((export_name("error_line_number"))) int error_line_number(void){re
 __attribute__((export_name("error_column_number"))) int error_column_number(void){return error_column;}
 __attribute__((export_name("compile"))) int compile(int length){
   output_length=0;error_text[0]=0;error_line=1;error_column=1;
-  cursor=0;cursor_line=1;cursor_column=1;locals_length=0;
+  cursor=0;cursor_line=1;cursor_column=1;locals_length=0;expr_depth=0;
   body.data=code;body.used=0;body.cap=CODE_LIMIT;
   tok.type=T_END;tok.line=1;tok.column=1;
   if(length<0||length>INPUT_LIMIT){message("E_SOURCE_LIMIT: source exceeds input capacity");return 1;}
