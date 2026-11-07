@@ -1,3 +1,3 @@
-// Generated from exact-source private compiler artifact; do not release without independent approval.
-export const COMPILER_SHA256 = '0895ec29df5f811c4f70101a37a5a3d08095ea2b69230e97cd128674c081ae89';
-export const COMPILER_BYTES = 162654;
+// Generated from exact-source private compiler artifact; never deploy without independent public release authorization.
+export const COMPILER_SHA256 = '7f0dc78c31a67f2f2687d4cc3ec3ada0a861306abc2b568fddacee3d61b50034';
+export const COMPILER_BYTES = 162221;
