@@ -55,6 +55,16 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 
 Each guest runs in a fresh worker with a 3-second deadline, which ends infinite loops. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
 
+## Experimental browser actor substrate
+
+The separate `atto.browser.actor.scalar.v0` ABI is described in
+[ACTOR_BROWSER_ABI.md](ACTOR_BROWSER_ABI.md). It executes validated,
+source-free `receive(i64)->i64` guest modules in dedicated Web Workers with
+per-actor mutable Wasm global state, FIFO mailboxes, bounded admission and
+worker termination on deadline, trap, or protocol error. **This is not yet
+AttoLang `define actor` code generation or browser actor-language parity.**
+It does not change the existing `atto.browser.guest.v1` compiler ABI.
+
 ## Static release and disclosure gate
 
 The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **18 enumerated browser assets** (HTML, CSS, JS, six examples, compiler receipt, compiler Wasm and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
