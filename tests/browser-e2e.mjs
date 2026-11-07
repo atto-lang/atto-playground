@@ -317,6 +317,42 @@ try {
   assert.deepEqual(actorProbe,{values:['40','42'],isolated:'7',invalid:true,closed:true});
   ok('dedicated Web Workers execute real stateful Wasm actor messages with FIFO, isolation and closure');
 
+  // Test the worker protocol directly: a duplicate/reordered admission must
+  // trigger terminal failure before executing receive() again. This protects
+  // mutable private actor state even if the host wrapper is bypassed.
+  const replayProbe=await js(`(async()=>{
+    const bytes=Uint8Array.from(${JSON.stringify(Array.from(COUNTER_WASM))});
+    async function attempt(firstId, nextId) {
+      const worker=new Worker('/play/src/actor-worker.js',{type:'module'});
+      function next() {
+        return new Promise((resolve,reject)=>{
+          const timer=setTimeout(()=>reject(new Error('actor protocol response deadline')),2000);
+          worker.onmessage=event=>{clearTimeout(timer);resolve(event.data);};
+          worker.onerror=()=>{clearTimeout(timer);reject(new Error('actor protocol worker error'));};
+        });
+      }
+      try {
+        const waitingReady=next();
+        worker.postMessage({kind:'init',wasm:bytes});
+        const ready=await waitingReady;
+        if(ready.kind!=='ready')throw new Error('actor init failed');
+        const waitingFirst=next();
+        worker.postMessage({kind:'message',id:firstId,value:40n});
+        const first=await waitingFirst;
+        if(first.kind!=='result'||first.value!==40n)throw new Error('initial guest result failed');
+        const waitingFault=next();
+        worker.postMessage({kind:'message',id:nextId,value:2n});
+        const fault=await waitingFault;
+        return {first:String(first.value),fault:fault.kind==='fault'&&/replayed or reordered/.test(fault.message)};
+      } finally {worker.terminate();}
+    }
+    return {duplicate:await attempt(1,1),reordered:await attempt(2,1)};
+  })()`);
+  assert.deepEqual(replayProbe,{
+    duplicate:{first:'40',fault:true},reordered:{first:'40',fault:true}
+  });
+  ok('raw actor worker refuses duplicate and reordered IDs before replaying guest state');
+
   const timeoutProbe=await js(`(async()=>{
     const {spawnWasmActor}=await import('/play/src/actor-runtime.js');
     const actor=await spawnWasmActor(Uint8Array.from(${JSON.stringify(Array.from(LOOP_WASM))}),{timeoutMs:100});
