@@ -1,36 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { inflateSync } from 'node:zlib';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createCompiler } from '../src/compiler.js';
 import { guestImports } from '../src/guest.js';
+import { decodeItfBundle, unpackBooleanState, allowedModelTransition, verifyRawItfTrace } from './helpers/quint-itf-validation.mjs';
 
 const projection = JSON.parse(await readFile(new URL('./fixtures/quint-dual-realm-state-projection.json', import.meta.url), 'utf8'));
 const projectionBytes = await readFile(new URL('./fixtures/quint-dual-realm-state-projection.json', import.meta.url));
 const rawTraceBundle = await readFile(new URL('./fixtures/quint-dual-realm-raw-itf.deflate.b64', import.meta.url), 'utf8');
-const rawTraceTexts = JSON.parse(inflateSync(Buffer.from(rawTraceBundle.trim(), 'base64')).toString('utf8'));
+const rawTraceTexts = decodeItfBundle(rawTraceBundle);
 const source = await readFile(new URL('./fixtures/dual_realm_browser.atto', import.meta.url), 'utf8');
 const compilerBytes = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
 const compilerReceipt = JSON.parse(await readFile(new URL('../public/atto_compiler.receipt.json', import.meta.url), 'utf8'));
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
-
-function unpack(char) {
-  assert.match(char, /^[0-7]$/, 'every projected state must be exactly three booleans');
-  const bits = Number(char);
-  return { a: Boolean(bits & 4), b: Boolean(bits & 2), accepted: Boolean(bits & 1) };
-}
-
-function allowedModelTransition(prev, next) {
-  const sameRealms = prev.a === next.a && prev.b === next.b;
-  const sameAccepted = prev.accepted === next.accepted;
-  const stutter = sameRealms && sameAccepted;
-  const enableA = !prev.a && next.a && next.b === prev.b && sameAccepted;
-  const enableB = !prev.b && next.b && next.a === prev.a && sameAccepted;
-  const accept = sameRealms && !prev.accepted && next.accepted && prev.a && prev.b;
-  const clear = sameRealms && prev.accepted && !next.accepted;
-  return stutter || enableA || enableB || accept || clear;
-}
 
 test('genuine Quint-generated states one-way refine compiled Atto guest admission', async () => {
   assert.equal(projection.schema, 'shared-auth.quint-itf-state-projection.v1');
@@ -78,23 +61,11 @@ test('genuine Quint-generated states one-way refine compiled Atto guest admissio
     const trace = projection.traces[index];
     assert.equal(trace.itf, `trace_${index}.itf.json`);
     const rawText = rawTraceTexts[index];
-    assert.equal(sha256(rawText), trace.raw_itf_sha256, 'raw original ITF digest must match the producer receipt');
-    const rawTrace = JSON.parse(rawText);
-    assert.equal(rawTrace['#meta'].format, 'ITF');
-    assert.equal(rawTrace['#meta'].source, 'formal/dual_realm.qnt');
-    assert.deepEqual(rawTrace.vars.slice(0, 3), ['realm_a', 'realm_b', 'accepted']);
-    assert.equal(rawTrace.states.length, 21, 'raw ITF must contain initial state plus 20 model transitions');
-    const projectedBits = rawTrace.states.map(state => {
-      for (const field of ['realm_a', 'realm_b', 'accepted']) {
-        assert.equal(typeof state[field], 'boolean', 'ITF scalar state must be a boolean: ' + field);
-      }
-      return String(4 * Number(state.realm_a) + 2 * Number(state.realm_b) + Number(state.accepted));
-    }).join('');
-    assert.equal(trace.states, projectedBits, 'recorded projection must equal the original byte-verified ITF states');
+    verifyRawItfTrace(rawText, trace, index);
     originalHashes.push(trace.raw_itf_sha256);
     let prev = null;
     for (const char of trace.states) {
-      const state = unpack(char);
+      const state = unpackBooleanState(char);
       if (prev === null) {
         assert.deepEqual(state, { a: false, b: false, accepted: false }, 'model init');
       } else {
