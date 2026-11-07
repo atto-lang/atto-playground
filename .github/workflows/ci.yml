@@ -34,6 +34,12 @@ jobs:
           export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
           npm run test:browser
           npm run test:e2e
+      - name: Stage reviewed assets and test the actual publishable browser build
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node scripts/package-pages.mjs _site
+          ATTO_STATIC_ROOT="$PWD/_site" npm run test:e2e
       - name: Record tested compiler artifact and toolchain
         run: |
           sha256sum public/atto_compiler.wasm

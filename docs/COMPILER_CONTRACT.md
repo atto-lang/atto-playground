@@ -22,3 +22,10 @@ No imports, arbitrary functions, floats, strings, actors, allocation, loops, fil
 `atto_compiler.wasm` exports `memory`, `input_ptr`, `input_capacity`, `compile(length)`, `result_ptr`, `result_length`, `error_ptr`, `error_line_number`, and `error_column_number`. `compile` returns zero on success; nonzero on error with `result_length=0`. Code is copied out of compiler linear memory before the worker is terminated.
 
 This is not production-ready sandboxing or whole-language coverage. All user code is untrusted; do not enable imports without an explicit capability policy. Cross-repository integration must pin compiler source SHA, artifact digest, executed tests, and independent review before claims of backend parity.
+
+
+## Static release artifact boundary
+
+`scripts/package-pages.mjs` is the **only** approved build path for the GitHub Pages artifact. It copies precisely the explicit HTML, CSS, JS, compiler-Wasm and public contract files, checks every parent component against symlinks, verifies the shipped compiler is valid import-free WebAssembly, and writes `release-manifest.json` containing source SHA and per-file SHA-256. It does not publish `compiler/`, `tests/`, `.github/`, or arbitrary new paths. Browser E2E runs against the staged output, not only the source checkout.
+
+Pages deployment is deliberately restricted to a `push` on `main`; workflow dispatch from an unreviewed branch is not a release path. Repository branch protection, independent approval, hosting eligibility, deployment environment protection and public HTTPS checks remain **administrative release gates** and are not satisfied by this workflow alone.
