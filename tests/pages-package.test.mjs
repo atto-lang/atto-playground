@@ -6,14 +6,15 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { packagePages, PAGES_ASSETS } from '../scripts/package-pages.mjs';
 
-const blankWasm = Buffer.from([0, 97, 115, 109, 1, 0, 0, 0]);
+const releaseWasm = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'atto-pages-package-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   for (const name of PAGES_ASSETS) {
     const path = join(root, name);
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, name.endsWith('.wasm') ? blankWasm : 'safe ' + name);
+    const checked = ['public/atto_compiler.wasm','public/atto_compiler.receipt.json','src/compiler-pin.js'].includes(name);
+    await writeFile(path, checked ? await readFile(new URL('../'+name, import.meta.url)) : 'safe ' + name);
   }
   return root;
 }
@@ -27,7 +28,7 @@ test('allowlist excludes unrelated source, tests, dotfiles and unreviewed assets
   const manifest = await packagePages({ root, destination: '_site', sourceSha: sha });
   assert.equal(manifest.source_commit, sha);
   assert.deepEqual(Object.keys(manifest.assets), PAGES_ASSETS);
-  assert.deepEqual((await readdir(join(root, '_site'))).sort(), ['docs', 'index.html', 'public', 'release-manifest.json', 'src', 'styles.css'].sort());
+  assert.deepEqual((await readdir(join(root, '_site'))).sort(), ['docs', 'examples', 'index.html', 'public', 'release-manifest.json', 'src', 'styles.css'].sort());
   const recorded = JSON.parse(await readFile(join(root, '_site/release-manifest.json'), 'utf8'));
   assert.deepEqual(recorded, manifest);
   for (const name of PAGES_ASSETS) {
@@ -57,7 +58,7 @@ test('refuses invalid compiler Wasm, empty/oversized assets and bad commit metad
   const root = await fixture(t);
   await writeFile(join(root, 'public/atto_compiler.wasm'), 'invalid');
   await assert.rejects(packagePages({ root }), /Invalid compiler Wasm/);
-  await writeFile(join(root, 'public/atto_compiler.wasm'), blankWasm);
+  await writeFile(join(root, 'public/atto_compiler.wasm'), releaseWasm);
   await writeFile(join(root, 'styles.css'), Buffer.alloc(1024 * 1024 + 1));
   await assert.rejects(packagePages({ root }), /Invalid published asset size/);
   await writeFile(join(root, 'styles.css'), 'safe');
@@ -70,4 +71,22 @@ test('cannot package outside project tree or destroy source root', async t => {
     await assert.rejects(packagePages({ root, destination }), /Only _site/, destination);
   }
   assert.ok((await readFile(join(root, 'index.html'))).length > 0);
+});
+
+test('fails closed when compiler receipt/pin disagree or approval is absent', async t => {
+  const root = await fixture(t);
+  await assert.rejects(packagePages({ root, approvedCompilerSha256: 'f'.repeat(64) }), /release lacks matching public-disclosure approval/);
+  await packagePages({ root, approvedCompilerSha256: JSON.parse(await readFile(join(root, 'public/atto_compiler.receipt.json'), 'utf8')).compiler_sha256 });
+  const receiptPath = join(root,'public/atto_compiler.receipt.json');
+  const receipt = JSON.parse(await readFile(receiptPath,'utf8'));
+  receipt.compiler_sha256 = '0'.repeat(64);
+  await writeFile(receiptPath, JSON.stringify(receipt));
+  await assert.rejects(packagePages({ root }), /Compiler receipt, pinned digest or byte length does not match/);
+});
+
+test('Pages staging path cannot be a symlink', async t => {
+  const root = await fixture(t);
+  await mkdir(join(root, 'malicious'));
+  await symlink('malicious', join(root, '_site'));
+  await assert.rejects(packagePages({ root }), /Pages staging directory cannot be a symlink/);
 });

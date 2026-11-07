@@ -16,32 +16,27 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - name: Install WebAssembly linker
-        run: sudo apt-get update && sudo apt-get install -y clang lld
-      - name: Check exact checkout and compiler tree
+      - name: Require exact checkout
         env:
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git rev-parse HEAD
           git rev-parse HEAD^{tree}
-          node --version
-          clang --version
-      - name: Build actual compiler Wasm and run guest fixtures
+      - name: Validate compiler receipt, ABI and real guest execution
         run: npm run verify
-      - name: Browser E2E smoke (real headless Chromium)
+      - name: Browser smoke and full Chromium E2E
         run: |
           export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
           npm run test:browser
           npm run test:e2e
-      - name: Stage reviewed assets and test the actual publishable browser build
+      - name: Package allowlisted public assets and test deployed shape
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
           node scripts/package-pages.mjs _site
           ATTO_STATIC_ROOT="$PWD/_site" npm run test:e2e
-      - name: Record tested compiler artifact and toolchain
-        run: |
+          test -s _site/release-manifest.json
           sha256sum public/atto_compiler.wasm
-          node -e 'const fs = require("fs"); const wasm = fs.readFileSync("public/atto_compiler.wasm"); if (!WebAssembly.validate(wasm)) process.exit(1)'
-          echo "Artifact was freshly built from the checked-out source; byte-identical cross-toolchain builds require a separately pinned Clang distribution."
+          cat public/atto_compiler.receipt.json

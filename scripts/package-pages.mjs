@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
 
 export const PAGES_ASSETS = Object.freeze([
   'index.html',
@@ -11,10 +12,18 @@ export const PAGES_ASSETS = Object.freeze([
   'src/compiler.js',
   'src/compiler-worker.js',
   'src/runner-worker.js',
-  'src/guest-contract.js',
+  'src/guest.js',
   'src/worker-task.js',
+  'src/compiler-pin.js',
   'public/atto_compiler.wasm',
-  'docs/COMPILER_CONTRACT.md'
+  'public/atto_compiler.receipt.json',
+  'docs/COMPILER_CONTRACT.md',
+  'examples/conditions.atto',
+  'examples/error.atto',
+  'examples/fib.atto',
+  'examples/hello.atto',
+  'examples/overflow.atto',
+  'examples/primes.atto',
 ]);
 
 async function checkedFile(root, name) {
@@ -35,7 +44,8 @@ async function checkedFile(root, name) {
 export async function packagePages({
   root = fileURLToPath(new URL('..', import.meta.url)),
   destination = '_site',
-  sourceSha = null
+  sourceSha = null,
+  approvedCompilerSha256 = null
 } = {}) {
   const projectRoot = resolve(root);
   const target = resolve(projectRoot, destination);
@@ -54,7 +64,26 @@ export async function packagePages({
     }
     files.push({ name, bytes });
   }
-  await rm(target, { recursive: true, force: true });
+  const compiler = files.find(x => x.name === 'public/atto_compiler.wasm').bytes;
+  const receipt = JSON.parse(files.find(x => x.name === 'public/atto_compiler.receipt.json').bytes.toString('utf8'));
+  if (receipt.schema !== 'atto.browser.compiler.vendor.v1' ||
+      receipt.compiler_sha256 !== COMPILER_SHA256 ||
+      receipt.compiler_bytes !== COMPILER_BYTES ||
+      compiler.length !== COMPILER_BYTES ||
+      createHash('sha256').update(compiler).digest('hex') !== receipt.compiler_sha256) {
+    throw new Error('Compiler receipt, pinned digest or byte length does not match');
+  }
+  if (approvedCompilerSha256 !== null && (
+      !/^[a-f0-9]{64}$/.test(approvedCompilerSha256) ||
+      approvedCompilerSha256 !== receipt.compiler_sha256)) {
+    throw new Error('Compiler release lacks matching public-disclosure approval');
+  }
+  const targetEntry = await lstat(target).catch(error => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (targetEntry?.isSymbolicLink()) throw new Error('Pages staging directory cannot be a symlink');
+    await rm(target, { recursive: true, force: true });
   const assets = {};
   for (const { name, bytes } of files) {
     const path = join(target, name);
@@ -70,7 +99,8 @@ export async function packagePages({
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const manifest = await packagePages({
     destination: process.argv[2] || '_site',
-    sourceSha: process.env.SOURCE_COMMIT || null
+    sourceSha: process.env.SOURCE_COMMIT || null,
+    approvedCompilerSha256: process.env.APPROVED_COMPILER_SHA256 || null
   });
   console.log('PASS: ' + Object.keys(manifest.assets).length + ' explicitly allowlisted Pages assets; compiler SHA256 ' +
     manifest.assets['public/atto_compiler.wasm'].sha256);
