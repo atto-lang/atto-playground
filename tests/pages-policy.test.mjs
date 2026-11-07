@@ -19,6 +19,8 @@ test('public binary must match independently set administrator digest', () => {
   assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /cmp public\/atto_compiler\.wasm _site\/public\/atto_compiler\.wasm/);
   assert.match(workflow, /npm run verify/);
+  assert.match(workflow, /ATTO_REQUIRE_ACTOR_SOURCE_E2E:\s*'1'/,
+    'public release must execute Atto actor source through compiled Wasm and a real browser worker');
 });
 test('deployment permissions stay least-privilege and independent review is documented', () => {
   assert.match(workflow, /contents: read/);
