@@ -11,7 +11,7 @@ Requires Node 20 or later. Python 3 is optional, for the HTTP server. There are 
 ```sh
 npm run verify          # receipt digest, compiler ABI, examples, guests, worker tests
 npm run serve           # http://localhost:8080
-CHROME_BIN=... npm run test:e2e   # 16 real-browser scenarios under /play/
+CHROME_BIN=... npm run test:e2e   # 17 real-browser scenarios under /play/
 ```
 
 To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-source.rs`. It rebuilds the wasm and rewrites `public/atto_compiler.receipt.json` with the source head, tree, toolchain and sha256. CI fails if the shipped wasm does not match the receipt.
