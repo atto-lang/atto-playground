@@ -106,7 +106,7 @@ export function installProgramPicker({ selector, editor, nameInput, saveButton, 
         link.href = url;
         link.download = 'atto-programs-backup.json';
         link.click();
-      } finally { setTimeout(() => URL.revokeObjectURL(url), 0); }
+      } finally { setTimeout(() => URL.revokeObjectURL(url), 5000); }
       tell('Saved program backup exported to JSON');
     } catch (error) { tell('Backup failed: ' + error.message); }
   });
