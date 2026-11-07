@@ -6,22 +6,31 @@ import { isI64, validateActorGuest } from './actor-abi.js';
 
 let instance = null;
 let starting = false;
+let terminated = false;
 let nextMessageId = 1;
 function terminal(message) {
+  if (terminated) return;
+  terminated = true;
   try { self.postMessage({ kind: 'fault', message: String(message).slice(0, 512) }); }
   finally { self.close(); }
 }
 self.onmessage = async ({ data }) => {
+  if (terminated) return;
   if (!instance) {
     if (starting || data?.kind !== 'init') return terminal('E_ACTOR_PROTOCOL: expected single init');
     starting = true;
     try {
       const bytes = data.wasm;
       const mod = validateActorGuest(bytes);
-      instance = await WebAssembly.instantiate(mod, {});
+      const candidate = await WebAssembly.instantiate(mod, {});
+      // The worker can receive a second init while WebAssembly.instantiate
+      // is still pending. A terminal protocol fault must never publish a
+      // late 'ready' or resurrect a guest after that fault.
+      if (terminated) return;
+      instance = candidate;
       self.postMessage({ kind: 'ready' });
     } catch (error) {
-      terminal('E_ACTOR_INIT: ' + error.message);
+      if (!terminated) terminal('E_ACTOR_INIT: ' + error.message);
     }
     return;
   }
