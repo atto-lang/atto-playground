@@ -4,7 +4,11 @@ The build is **static**: browsers download the compiler Wasm and generate/run gu
 
 ## GitHub Pages project site
 
-This repository includes `.github/workflows/pages.yml`. Enable **Settings → Pages → Build and deployment → GitHub Actions** (subject to the organization's private-repository Pages eligibility). After an independently reviewed merge into `main`, the workflow builds and tests the actual compiler and deploys the site.
+This repository includes `.github/workflows/pages.yml`. Enable **Settings → Pages → Build and deployment → GitHub Actions** (subject to the organization's private-repository Pages eligibility). **Merging to `main` no longer deploys automatically.** A public deployment exposes the compiler Wasm to all visitors and requires separate approval for its exact SHA-256.
+
+Before a release, an authorized administrator must set repository Actions variable `ATTO_PUBLIC_COMPILER_SHA256` to the **exact approved 64-character lowercase SHA-256** of `public/atto_compiler.wasm`. Require independent review of source/compiler receipt and configure the `github-pages` environment with **required reviewers** in Settings; workflow YAML cannot impose reviewer protection on its own. After approvals, manually dispatch **Publish approved AttoLang playground** from `main`, supply that SHA-256 and select **yes** for public disclosure. The job fails closed when the variable is unset, the requested hash differs, or the bundled Wasm bytes differ. Remove or rotate the variable when withdrawing approval. Only authorized administrators should modify the release variable and environment.
+
+Do not dispatch this workflow or mirror the compiler to a public website while approval is outstanding. Manual dispatch and a matching hash are **not substitutes** for independent review or protected deployment environments.
 
 Expected default project URL after successful deployment (not verified live yet):
 

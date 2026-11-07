@@ -1,8 +1,19 @@
-name: Publish static AttoLang playground
+name: Publish approved AttoLang playground
+# Compiler Wasm is publicly inspectable after distribution. No automatic deploy.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      expected_compiler_sha256:
+        description: 'SHA-256 of explicitly approved public compiler Wasm'
+        required: true
+        type: string
+      confirm_public_disclosure:
+        description: 'Confirm that publishing this compiler binary is authorized'
+        required: true
+        type: choice
+        options:
+          - 'no'
+          - 'yes'
 permissions:
   contents: read
 concurrency:
@@ -10,15 +21,31 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
+    if: ${{ inputs.confirm_public_disclosure == 'yes' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          ref: main
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
-      - name: Verify vendored compiler and execute real Wasm guests
+      - name: Verify separate repository-level public release approval
+        env:
+          APPROVED_SHA256: ${{ vars.ATTO_PUBLIC_COMPILER_SHA256 }}
+          REQUESTED_SHA256: ${{ inputs.expected_compiler_sha256 }}
+        run: |
+          set -eu
+          case "$APPROVED_SHA256" in
+            *[!0-9a-f]*|'') echo 'Missing or invalid administrator release approval'; exit 1 ;;
+          esac
+          test "${#APPROVED_SHA256}" -eq 64
+          test "$REQUESTED_SHA256" = "$APPROVED_SHA256"
+          ACTUAL_SHA256="$(sha256sum public/atto_compiler.wasm | cut -d' ' -f1)"
+          test "$ACTUAL_SHA256" = "$APPROVED_SHA256"
+          echo "Approved compiler SHA-256: $ACTUAL_SHA256"
+      - name: Verify source-controlled receipt and run compiler tests
         run: |
           git rev-parse HEAD
           git rev-parse HEAD^{tree}
@@ -29,6 +56,7 @@ jobs:
           mkdir -p _site
           cp -R index.html styles.css src public examples docs _site/
           test -s _site/public/atto_compiler.wasm
+          cmp public/atto_compiler.wasm _site/public/atto_compiler.wasm
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: _site
