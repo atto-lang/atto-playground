@@ -25,6 +25,10 @@ jobs:
           clang --version
       - name: Build actual compiler Wasm and run guest fixtures
         run: npm run verify
+      - name: Browser E2E smoke (real headless Chromium)
+        run: |
+          export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
+          npm run test:browser
       - name: Record tested compiler artifact and toolchain
         run: |
           sha256sum public/atto_compiler.wasm
