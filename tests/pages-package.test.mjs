@@ -66,7 +66,8 @@ test('refuses invalid compiler Wasm, empty/oversized assets and bad commit metad
 
 test('cannot package outside project tree or destroy source root', async t => {
   const root = await fixture(t);
-  await assert.rejects(packagePages({ root, destination: root }), /Refusing destination/);
-  await assert.rejects(packagePages({ root, destination: '../escape' }), /Refusing destination/);
+  for (const destination of [root, '../escape', 'src', 'public', 'docs', '.github']) {
+    await assert.rejects(packagePages({ root, destination }), /Only _site/, destination);
+  }
   assert.ok((await readFile(join(root, 'index.html'))).length > 0);
 });

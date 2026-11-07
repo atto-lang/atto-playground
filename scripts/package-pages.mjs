@@ -39,7 +39,8 @@ export async function packagePages({
 } = {}) {
   const projectRoot = resolve(root);
   const target = resolve(projectRoot, destination);
-  if (!target.startsWith(projectRoot + sep)) throw new Error('Refusing destination outside source tree');
+  // Never let a caller point the cleanup operation at a source directory.
+  if (target !== resolve(projectRoot, '_site')) throw new Error('Only _site is an allowed Pages staging destination');
   if (sourceSha !== null && !/^[a-f0-9]{40}$/.test(sourceSha)) throw new Error('Invalid source commit SHA');
 
   // Read and validate everything before removing or writing the destination.
