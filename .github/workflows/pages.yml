@@ -43,6 +43,15 @@ jobs:
           test "${#RELEASE_APPROVAL}" -eq 64
           test "$RELEASE_APPROVAL" = "$REQUESTED_APPROVAL"
           test "$RELEASE_APPROVAL" = "$(sha256sum public/atto_compiler.wasm | cut -d' ' -f1)"
+      - name: Require independently approved actor source, CI job and artifact
+        env:
+          ATTO_PUBLIC_COMPILER_SHA256: ${{ vars.ATTO_PUBLIC_COMPILER_SHA256 }}
+          ATTO_PUBLIC_ACTOR_SOURCE_HEAD: ${{ vars.ATTO_PUBLIC_ACTOR_SOURCE_HEAD }}
+          ATTO_PUBLIC_ACTOR_SOURCE_TREE: ${{ vars.ATTO_PUBLIC_ACTOR_SOURCE_TREE }}
+          ATTO_PUBLIC_ACTOR_CI_RUN_ID: ${{ vars.ATTO_PUBLIC_ACTOR_CI_RUN_ID }}
+          ATTO_PUBLIC_ACTOR_CI_JOB_ID: ${{ vars.ATTO_PUBLIC_ACTOR_CI_JOB_ID }}
+          ATTO_PUBLIC_ACTOR_CI_ARTIFACT_ID: ${{ vars.ATTO_PUBLIC_ACTOR_CI_ARTIFACT_ID }}
+        run: node scripts/actor-release-gate.mjs
       - name: Test compiler ABI, guests, and browser smoke
         run: |
           npm run verify
