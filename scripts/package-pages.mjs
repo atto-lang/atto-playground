@@ -5,6 +5,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
 import { ACTOR_ABI } from '../src/actor-abi.js';
+import { verifyActorReleaseReceipt } from './actor-release-gate.mjs';
 import { FORMATTER_SHA256, FORMATTER_BYTES, FORMATTER_SOURCE_COMMIT } from '../src/formatter-pin.js';
 
 export const PAGES_ASSETS = Object.freeze([
@@ -103,6 +104,9 @@ export async function packagePages({
   if (supportsActor ? receipt.actor_abi !== ACTOR_ABI : receipt.actor_abi !== undefined) {
     throw new Error('Compiler actor ABI export and release receipt do not match');
   }
+  // Required on every actor-enabled artifact, even during unprivileged CI.
+  // Administrator approval is additionally required by pages.yml at deploy.
+  verifyActorReleaseReceipt(receipt, supportsActor);
   const formatter = files.find(x => x.name === 'public/oreslang_format.wasm').bytes;
   const formatterReceipt = JSON.parse(files.find(x => x.name === 'public/oreslang_format.receipt.json').bytes.toString('utf8'));
   if (formatterReceipt.schema !== 'atto.browser.formatter.vendor.v1' ||
