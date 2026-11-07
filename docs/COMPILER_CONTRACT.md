@@ -23,6 +23,13 @@ A trap inside the compiler instance would leave its state undefined. `createComp
 The compiler adds no syntax of its own:
 
 - **Syntax** follows the reference compiler (`oreslang-source.java` `docs/grammar.ebnf` / `Parser.java`).
+
+**Known semantics drift in the currently pinned legacy compiler:** it predates
+AttoLang compiler semantic fix PR #4 and still admits removed arithmetic
+operators such as `%` while retaining its earlier condition evaluation behavior.
+That legacy behavior is tested only as a compatibility fact, **not** certified
+as canonical AttoLang. The corrected source-owned compiler must undergo the
+independent release process before the published binary can change.
 - **`int`** follows the LLVM backend and spec chapter 17: signed 64-bit with checked arithmetic, where overflow is a panic.
 
 | Area | Admitted |
@@ -32,7 +39,7 @@ The compiler adds no syntax of its own:
 | Types | `int`, `bool` / `boolean`, `void` |
 | Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred |
 | Control flow | `if … then … elif … else … fi`, brace form closed by `fi`, `while … do … done`, `loop { }`, `for (let i = 0; i < n; i++)`, `break`, `continue` |
-| Expressions | `+ - * %`, `< <= > >=`, `eq neq == !=`, `!`, ternary, `,` / `\|` in conditions, `And` / `Or` / `Xor` |
+| Expressions | Current pinned legacy compiler: `+ - * %` and listed comparisons/conditions. Canonical correction PR #4 rejects `%`, `^`, `^^` and evaluates condition operands eagerly. |
 | Output | `stdio.print` / `stdio.println` of `int`, `bool` and string literals |
 
 Anything else is rejected with an `E_*` diagnostic, and a rejected program produces no artifact. That includes:
