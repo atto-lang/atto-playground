@@ -62,11 +62,16 @@ export function createActorSession({ compile = null, spawn = spawnWasmActor } = 
       validateActorGuest(result.wasm);
       spawned = await spawn(result.wasm);
       if (id !== generation) {
-        spawned.close();
+        // A worker may finish initializing after Stop. Never adopt it.
+        spawned?.close?.();
         throw new Error('E_ACTOR_CANCELLED');
       }
-      if (!spawned || typeof spawned.send !== 'function' || typeof spawned.close !== 'function')
+      if (!spawned || typeof spawned.send !== 'function' || typeof spawned.close !== 'function') {
+        // Release partially initialized handles, including a worker wrapper
+        // which exposes close() but lacks the mandatory send() contract.
+        spawned?.close?.();
         throw new Error('E_ACTOR_PROTOCOL: invalid actor handle');
+      }
       actor = spawned;
       return { wasm: result.wasm };
     } finally {
