@@ -30,6 +30,18 @@ async function run(source) {
 }
 const main = body => `pub fnc main(): int {\n${body}\n}`;
 
+test('new Rust compiler class heap failure is labelled without changing guest capabilities', () => {
+  const mock = code => ({ exports: { panic_code: { value: code } } });
+  assert.equal(describePanic(mock(3), new Error('unreachable')),
+    'E_PANIC: class heap exhausted (64 KiB guest limit)');
+  assert.equal(describePanic(mock(1), new Error('unreachable')),
+    'E_PANIC: integer overflow');
+  assert.equal(describePanic(mock(0), new Error('opaque trap')),
+    'E_RUNTIME: opaque trap');
+  const original = new WebAssembly.Module(compilerBytes);
+  assert.deepEqual(WebAssembly.Module.imports(original), []);
+});
+
 test('vendored compiler matches its provenance receipt', () => {
   assert.equal(createHash('sha256').update(compilerBytes).digest('hex'), receipt.compiler_sha256);
   assert.equal(compilerBytes.length, receipt.compiler_bytes);

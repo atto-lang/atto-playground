@@ -50,6 +50,7 @@ export function describePanic(instance, error) {
   const code = instance.exports.panic_code?.value ?? 0;
   if (code === 1) return 'E_PANIC: integer overflow';
   if (code === 2) return 'E_PANIC: division by zero';
+  if (code === 3) return 'E_PANIC: class heap exhausted (64 KiB guest limit)';
   if (error instanceof RangeError) return 'E_PANIC: stack exhausted (recursion too deep)';
   return `E_RUNTIME: ${error.message}`;
 }
