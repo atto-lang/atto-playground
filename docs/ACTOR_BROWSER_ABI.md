@@ -14,7 +14,10 @@ source and cannot claim five-backend conformance.
 - V0 forbids table, memory, element, data, data-count, tag and start sections.
   Future actor heaps will require a new ABI version with explicit bounded memory.
 - A browser message must be a signed i64 BigInt, structured-cloned, assigned a
-  monotonic sequence id, and processed synchronously by the worker.
+  strictly increasing safe-integer sequence id, and processed synchronously by the worker.
+  The worker rejects duplicate or reordered IDs **before** executing the guest handler,
+  sends a terminal protocol fault, and closes. Accepted IDs cannot replay mutable state.
+  This is an intra-worker replay defense, **not** cross-tenant authenticated messaging.
 - Host admission is limited to 32 outstanding messages (configurable lower).
   Every message has a deadline (default 3 seconds). Any trap, timeout,
   unexpected response, malformed packet or worker failure **terminates that
