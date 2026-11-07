@@ -1,0 +1,8 @@
+// Empty nominal declarations. Members and runtime construction not lowered.
+define struct Packet as end
+define interface Serializable as end
+define trait Printable as end
+
+pub fnc main(): int {
+  return 42;
+}

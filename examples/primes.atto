@@ -1,10 +1,18 @@
 // Loops: for, while ... do ... done, continue, break
+// The removed % operator is intentionally not part of AttoLang M1.
+fnc is_divisible(int n, int d): bool {
+  let remainder = n;
+  while remainder >= d do
+    remainder = remainder - d;
+  done
+  return remainder eq 0;
+}
 fnc is_prime(int n): bool {
   if n < 2 then
     return false;
   fi
   for (let d = 2; d * d <= n; d++) do
-    if n % d eq 0 then
+    if is_divisible(n, d) then
       return false;
     fi
   done

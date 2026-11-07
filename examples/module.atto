@@ -1,0 +1,10 @@
+// Namespace-like module function declarations
+define module Math as
+  fnc answer(): int {
+    return 42;
+  }
+end
+
+pub fnc main(): int {
+  return Math.answer();
+}

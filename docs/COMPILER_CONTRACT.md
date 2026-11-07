@@ -21,19 +21,19 @@ The compiler adds no syntax of its own:
 
 | Area | Admitted |
 | --- | --- |
-| Declarations | `[pub] fnc` / `routine`, `: T` or `-> T`, brace body; parameters `int a`, `int mut a`; arity overloads |
+| Declarations | `[pub] fnc` / `routine` or `define fnc` with `: T` or `-> T`; `define class` / `define actor` with static functions only; nominal `define enum` variants; `define module` functions; empty `define struct/interface/trait` |
 | Entry point | zero-argument `main` returning `int` or `void` |
-| Types | `int`, `bool` / `boolean`, `void` |
+| Types | `int`, `bool` / `boolean`, `void`; declared nominal enums (ordinal i64 representation, distinct enum identity in type checking) |
 | Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred |
 | Control flow | `if … then … elif … else … fi`, brace form closed by `fi`, `while … do … done`, `loop { }`, `for (let i = 0; i < n; i++)`, `break`, `continue` |
-| Expressions | `+ - * %`, `< <= > >=`, `eq neq == !=`, `!`, ternary, `,` / `\|` in conditions, `And` / `Or` / `Xor` |
+| Expressions | `+ - *`, `< <= > >=`, `eq neq == !=`, `!`, ternary, eager `,` / `\|` conditions, `And` / `Or` / `Xor`, qualified static calls and nominal enum variants |
 | Output | `stdio.print` / `stdio.println` of `int`, `bool` and string literals |
 
 Anything else is rejected with an `E_*` diagnostic, and a rejected program produces no artifact. That includes:
 
-- `int / int`, whose result type is undecided (spec S-25)
+- `int / int`, whose result type is undecided (spec S-25), and removed `%`, `^`, `^^` arithmetic operators
 - strings as values, floats and sized integers
-- classes, actors, `match`, imports and lambdas
+- actor spawning, mailboxes, constructors, instance fields and methods, inheritance/generics, enum payloads, nonempty struct/trait/interface members, `match`, imports and lambdas
 
 ## Compiler ABI v2
 
@@ -57,8 +57,12 @@ Each guest runs in a fresh worker with a 3-second deadline, which ends infinite 
 
 ## Static release and disclosure gate
 
-The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **18 enumerated browser assets** (HTML, CSS, JS, six examples, compiler receipt, compiler Wasm and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
+The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only explicitly enumerated browser assets are staged (HTML, CSS, JS, eleven examples, pinned compiler/formatter Wasm and receipts, this contract). The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
 
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v1` intentionally permits bounded stdout imports and memory for string literals. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
+
+## Exact build provenance and release state
+
+Browser top-level `define` support is sourced from the Rust compiler PR #7, source commit `6c60e38b82b6a08204da4cb0293d940200d821cf`, tree `1e472d7f0bb157504ed731a808d76bd51e4366d7`. Both the source CI (run `42397430806`) and a private, byte-verified mirror generated the same compiler Wasm: SHA-256 `cd56e869ca1508730c45abc2d4dad01066e946be5aadea54e39f9ab72c278dd2`, 163516 bytes, no imports. Compiler ABI remains v2 and guest ABI remains v1. New top-level declarations are a **strict subset**, not full actor runtime support. A public release requires independent review, explicit compiler digest approval and closing GitHub Pages issue #5; an open private PR does not mean the live website has been updated.

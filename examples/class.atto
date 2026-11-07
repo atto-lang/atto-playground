@@ -1,0 +1,10 @@
+// Top-level class declaration: static methods only, no instances yet
+define class Calculator as
+  static fnc answer(): int {
+    return 40 + 2;
+  }
+end
+
+pub fnc main(): int {
+  return Calculator.answer();
+}

@@ -52,7 +52,7 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
   const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
-  assert.deepEqual(names, ['conditions.atto', 'error.atto', 'fib.atto', 'hello.atto', 'overflow.atto', 'primes.atto']);
+  assert.deepEqual(names, ['actor.atto', 'class.atto', 'conditions.atto', 'declarations.atto', 'enum.atto', 'error.atto', 'fib.atto', 'hello.atto', 'module.atto', 'overflow.atto', 'primes.atto']);
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
   assert.deepEqual([r.value, r.stdout], [42n, 'Hello from WebAssembly!\n42\n']);
@@ -105,7 +105,7 @@ test('invalid programs fail closed and never return wasm', () => {
     [main('  return 0;') + '\u0000', 'E_NUL'],
     ['fnc helper(): int { return 1; }', 'E_ENTRY'],
     ['fnc f(int a): int {\n  if a > 1 then\n    return 1;\n  fi\n}\n' + main('  return f(0);'), 'E_RETURN'],
-    ['define class P as\nend\n' + main('  return 0;'), 'E_UNSUPPORTED'],
+    ['define class P as\n  fnc instance(): int { return 42; }\nend\n' + main('  return 0;'), 'E_UNSUPPORTED'],
   ]) {
     const r = compiler.compile(source);
     assert.equal(r.ok, false, source);
@@ -136,9 +136,11 @@ test('generated programs agree with expected arithmetic', async () => {
 });
 
 test('checked arithmetic panics with a language-level message', async () => {
-  let r = await run('fnc zero(): int { return 0; }\n' + main('  return 5 % zero();'));
-  assert.equal(r.message, 'E_PANIC: division by zero');
-  r = await run(main('  val m: int = -9223372036854775808;\n  return m - 1;'));
+  const removed = compiler.compile(main('  return 5 % 2;'));
+  assert.equal(removed.ok, false);
+  assert.match(removed.diagnostics[0].message, /^E_UNSUPPORTED/);
+  assert.equal('wasm' in removed, false);
+  let r = await run(main('  val m: int = -9223372036854775808;\n  return m - 1;'));
   assert.equal(r.message, 'E_PANIC: integer overflow');
   r = await run('fnc down(int n): int { return down(n + 1); }\n' + main('  return down(0);'));
   assert.equal(r.ok, false);
@@ -191,4 +193,29 @@ test('stdout truncation never splits a surrogate pair', () => {
   const exact = { text: '', truncated: false };
   appendCapped(exact, 'a'.repeat(STDOUT_LIMIT));
   assert.deepEqual([exact.text.length, exact.truncated], [STDOUT_LIMIT, false]);
+});
+
+test('top-level define class, actor, enum, module and empty nominal declarations execute as guest Wasm', async () => {
+  for (const name of ['class','actor','enum','module','declarations']) {
+    const source=await readFile(new URL('../examples/'+name+'.atto',import.meta.url),'utf8');
+    const result=await run(source);
+    assert.equal(result.ok,true,name);
+    assert.equal(result.value,42n,name);
+  }
+});
+test('unsupported class/actor instance semantics and cross-enum arithmetic fail closed', async () => {
+  const cases=[
+    ['define actor W as\n  receive(int x) { return 42; }\nend\n'+main('return 0;'),'E_UNSUPPORTED'],
+    ['define actor W as end\n'+main('val x = spawn W(); return 0;'),'E_UNSUPPORTED'],
+    ['define class C as\n  val n: int = 0;\nend\n'+main('return 0;'),'E_UNSUPPORTED'],
+    ['define enum E as Ready,Done end\n'+main('return E.Ready+1;'),'E_TYPE'],
+    ['define enum E as Ready,Ready end\n'+main('return 0;'),'E_DUPLICATE'],
+    ['define enum E as Ready end\n'+main('return E.Other;'),'E_UNBOUND'],
+  ];
+  for(const [source,code] of cases) {
+    const r=compiler.compile(source);
+    assert.equal(r.ok,false,source);
+    assert.match(r.diagnostics[0].message,new RegExp('^'+code+':'),source);
+    assert.equal('wasm' in r,false,source);
+  }
 });

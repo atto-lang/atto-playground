@@ -111,6 +111,16 @@ try {
   await navigate(base);
   ok('static site resolves under /play/');
 
+  // These are real compiler-Wasm plus guest-Wasm executions, not parser-only.
+  for (const sample of ['class','actor','enum','module','declarations']) {
+    await example(sample);
+    const v=await run('success','main() → 42');
+    assert.equal(v.downloadDisabled,false,'compiled Wasm is downloadable for '+sample);
+    assert.ok((await view()).source.includes('define '),'example really uses define');
+    ok('top-level '+sample+' declaration compiles and runs entirely in browser Wasm');
+  }
+  await example('hello');
+
   const unformatted='fnc main() -> int {\nreturn 42;\n}\n';
   await source(unformatted);
   await click('check-format');
@@ -207,10 +217,10 @@ try {
   s=await run('error','E_SYNTAX');
   assert.equal(s.downloadDisabled,true);
   ok('syntax error rejected in UI');
-  await source('fnc zero(): int { return 0; }\nfnc main() -> int { return 42 % zero(); }');
-  s=await run('error','E_PANIC: division by zero');
-  assert.match(s.bytes,/^\d+ bytes$/);
-  ok('runtime panic distinguished from compile error');
+  await source('fnc main() -> int { return 42 % 2; }');
+  s=await run('error','E_UNSUPPORTED');
+  assert.equal(s.downloadDisabled,true);
+  ok('removed arithmetic operator fails closed without an executable artifact');
   await example('overflow');
   s=await run('error','E_PANIC: integer overflow');
   assert.match(s.output,/4611686018427387904\nE_PANIC: integer overflow/);

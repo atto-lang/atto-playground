@@ -1,0 +1,13 @@
+// Enum variants have nominal identity; they are not interchangeable with int.
+define enum Status as Pending, Ready, Done end
+
+fnc is_ready(s: Status): bool {
+  return s eq Status.Ready;
+}
+
+pub fnc main(): int {
+  if is_ready(Status.Ready) then
+    return 42;
+  fi
+  return 0;
+}

@@ -48,3 +48,9 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+## Top-level define subset (preview)
+
+The next Rust compiler has browser-executed support for top-level `define class`, `define actor`, `define enum`, `define module`, plus empty `struct`/`trait`/`interface`. Static class/actor methods, module functions and nominal enum variants lower to guest Wasm. Actor spawn/mailboxes/ownership, constructors, instance fields/methods, enum ADT payloads and full class semantics remain unavailable and return a compiler error without producing Wasm. See `docs/COMPILER_CONTRACT.md` and the new examples.
+
+The compiler binary comes from private `atto-lang/atto-source.rs` PR #7 stacked on #4, with source CI and private SHA-verifying alternate-runner parity. This private playground branch does not authorize public release: GitHub Pages publishing policy issue `atto-lang/atto-lang.github.io#5` must be resolved before mirroring the new compiler binary to public Pages.

@@ -1,0 +1,10 @@
+// Actor type declaration with a static function. No spawn/mailbox runtime yet.
+define actor Worker as
+  static fnc answer(): int {
+    return 42;
+  }
+end
+
+pub fnc main(): int {
+  return Worker.answer();
+}
