@@ -4,9 +4,9 @@
   "publish_authorized": false,
   "source_repository": "atto-lang/atto-source.rs",
   "source_pull_request": 15,
-  "source_head": "dea30ac30058ad1dcce1dc27b58de2ec5f92ec8b",
-  "source_tree": "42c9bf37e2e46e4d3fe680f04749793d090fbdfa",
-  "ci_run_id": 42407039697,
+  "source_head": "77f9a678e16a9c97758898efe084ac25def9fe56",
+  "source_tree": "a2027f4c74bcb6c14fb1d16757918f1cc6e115aa",
+  "ci_run_id": 42409518848,
   "ci_success": true,
   "ci_executed_steps": 13,
   "compiler_abi": "atto-playground-v2",
@@ -14,8 +14,8 @@
   "target": "wasm32-unknown-unknown",
   "compiler_bytes": 179634,
   "compiler_sha256": "bc86a7003aba50fc922f478a347e8ee921a3b016a2ca21ba8a3f3a84f5e0c4a6",
-  "compiler_artifact_id": 13587792944,
-  "conformance_passed": 146,
+  "compiler_artifact_id": 13588658687,
+  "conformance_passed": 148,
   "native_wasm_byte_parity_passed": 106,
   "chromium_scenarios_passed": 10,
   "java_differential": "NOT_EXECUTED",
@@ -29,5 +29,6 @@
     "exact bytes and receipt digest verified at public staging",
     "manual approved release and HTTPS acceptance"
   ],
-  "note": "Private metadata-only candidate refreshed to exact-head source CI after five cross-feature regressions were consolidated into PR #15. Previous and new compiler binaries verified byte-identical. No public compiler bytes, vendored compiler pin, release permission, or Pages settings changed."
+  "note": "Private review-only candidate re-pinned to compiler PR #15 after exact-tree reconciliation with canonical-semantics main (source head 77f9a678e16a9c97758898efe084ac25def9fe56). Real guest tests 148/148 and native/Wasm 106 parity passed on CI #42409518848. Compiler Wasm digest remains byte-identical; archive SHA256 is separately named. No public compiler bytes, deployed compiler pin, release permission, or Pages settings changed.",
+  "compiler_archive_sha256": "c7fe6b3c69ffdc1910713bd5e5b50dc006b7aab6a67d761a5cdd1e1dcc5a90f5"
 }
