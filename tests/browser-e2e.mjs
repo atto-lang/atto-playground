@@ -266,7 +266,7 @@ try {
   await source(actorSource);
   await click('run-actor');
   if (hasActorCompiler) {
-    s=await poll(async()=>{const x=await view();return x?.kind==='success'&&x.output?.includes('Actor ready')&&!x.runDisabled?x:null;},'actor source compiled and running');
+    s=await poll(async()=>{const x=await view();return x?.kind==='success'&&x.output?.includes('Actor ready')&&!x.stopDisabled?x:null;},'actor source compiled and running');
     assert.equal(await js("document.querySelector('#send-actor').disabled"),false);
     assert.equal(s.downloadDisabled,false);
     await click('send-actor'); // default signed integer message 41
