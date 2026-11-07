@@ -72,3 +72,20 @@ The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`.
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v1` intentionally permits bounded stdout imports and memory for string literals. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
+
+## Experimental source-compiled actor mode (not yet released)
+
+The UI exposes separate **Run program** and **Start actor** flows. Actor mode
+calls `compile_actor(length)` only if the verified compiler exports it;
+otherwise it returns `E_ACTOR_UNAVAILABLE` and **no artifact**. Actor guest
+Wasm must conform exactly to `atto.browser.actor.scalar.v0`: import-free,
+`receive(i64)->i64`, size and section bounds enforced on the main thread
+and inside the Web Worker. This mode does not grant `atto.print_*` imports
+or use the normal `main()` guest worker.
+
+Until the compiler PR chain is independently reviewed and the compiler
+binary is specifically authorized, the pinned artifact remains the old
+compiler. CI must print `NOT_EXECUTED` for combined actor source/browser
+execution; when `ATTO_REQUIRE_ACTOR_SOURCE_E2E=1`, an old compiler must
+fail the certification test instead of quietly skipping it. The actor
+execution substrate is tested independently with real Wasm fixtures.
