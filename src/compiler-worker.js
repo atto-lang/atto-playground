@@ -16,7 +16,11 @@ self.onmessage = async ({ data }) => {
         });
     }
     const compiler = await compilerPromise;
-    const compiled = compiler.compile(data.source);
+    const kind = data?.kind ?? 'program';
+    if (kind !== 'program' && kind !== 'actor') throw new Error('Unsupported compile target');
+    const compiled = kind === 'actor'
+      ? compiler.compileActor(data.source)
+      : compiler.compile(data.source);
     if (compiled.ok) {
       self.postMessage({ ok: true, wasm: compiled.wasm }, [compiled.wasm.buffer]);
     } else {
