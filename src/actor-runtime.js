@@ -5,6 +5,7 @@ import { ACTOR_MAX_MAILBOX, ACTOR_MAX_WASM_BYTES, isI64 } from './actor-abi.js';
 
 export async function spawnWasmActor(wasm, {
   WorkerImpl = globalThis.Worker, timeoutMs = 3000, maxMailbox = ACTOR_MAX_MAILBOX,
+  signal = null,
 } = {}) {
   if (!(wasm instanceof Uint8Array) || !wasm.byteLength || wasm.byteLength > ACTOR_MAX_WASM_BYTES) {
     throw new RangeError('Actor Wasm must be 1..1048576 bytes');
@@ -16,10 +17,15 @@ export async function spawnWasmActor(wasm, {
     throw new RangeError('Invalid actor deadline');
   }
   if (typeof WorkerImpl !== 'function') throw new Error('Web Workers unavailable');
+  if (signal !== null && (typeof signal.addEventListener !== 'function' ||
+      typeof signal.removeEventListener !== 'function' || typeof signal.aborted !== 'boolean')) {
+    throw new TypeError('Invalid actor cancellation signal');
+  }
 
   const worker = new WorkerImpl(new URL('./actor-worker.js', import.meta.url), { type: 'module' });
   const pending = new Map();
   let ready = false, closed = false, nextId = 0, initTimer;
+  const onAbort = () => terminate(new Error('E_ACTOR_CANCELLED'));
   let readyResolve, readyReject;
   const started = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
 
@@ -27,6 +33,7 @@ export async function spawnWasmActor(wasm, {
     if (closed) return;
     closed = true;
     clearTimeout(initTimer);
+    signal?.removeEventListener('abort', onAbort);
     worker.onmessage = worker.onerror = worker.onmessageerror = null;
     worker.terminate();
     const error = reason instanceof Error ? reason : new Error(String(reason));
@@ -66,12 +73,16 @@ export async function spawnWasmActor(wasm, {
   worker.onerror = () => terminate(new Error('E_ACTOR_WORKER: worker failed'));
   worker.onmessageerror = () => terminate(new Error('E_ACTOR_WORKER: undecodable response'));
 
-  initTimer = setTimeout(() => terminate(new Error('E_ACTOR_TIMEOUT: initialization deadline exceeded')), timeoutMs);
-  try {
-    // Do not transfer caller-owned bytes: each actor gets a private copy.
-    worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm) });
-  } catch (error) {
-    terminate(error);
+  signal?.addEventListener('abort', onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  if (!closed) {
+    initTimer = setTimeout(() => terminate(new Error('E_ACTOR_TIMEOUT: initialization deadline exceeded')), timeoutMs);
+    try {
+      // Do not transfer caller-owned bytes: each actor gets a private copy.
+      worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm) });
+    } catch (error) {
+      terminate(error);
+    }
   }
   await started;
 
