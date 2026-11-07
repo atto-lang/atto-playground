@@ -12,11 +12,11 @@ test('Pages cannot publish automatically on pushes or PRs', () => {
 });
 test('public binary must match independently set administrator digest', () => {
   assert.match(workflow, /vars\.ATTO_PUBLIC_COMPILER_SHA256/);
-  assert.match(workflow, /REQUESTED_SHA256.*inputs\.expected_compiler_sha256/);
-  assert.match(workflow, /test "\$REQUESTED_SHA256" = "\$APPROVED_SHA256"/);
-  assert.match(workflow, /test "\$ACTUAL_SHA256" = "\$APPROVED_SHA256"/);
-  assert.match(workflow, /APPROVED_SHA256.*-eq 64/);
-  assert.match(workflow, /ref: main/);
+  assert.match(workflow, /REQUESTED_APPROVAL.*inputs\.expected_compiler_sha256/);
+  assert.match(workflow, /test "\$RELEASE_APPROVAL" = "\$REQUESTED_APPROVAL"/);
+  assert.match(workflow, /test "\$RELEASE_APPROVAL" = "\$\(sha256sum public\/atto_compiler\.wasm/);
+  assert.match(workflow, /RELEASE_APPROVAL.*-eq 64/);
+  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}/);
   assert.match(workflow, /cmp public\/atto_compiler\.wasm _site\/public\/atto_compiler\.wasm/);
   assert.match(workflow, /npm run verify/);
 });

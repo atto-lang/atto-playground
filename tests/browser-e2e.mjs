@@ -8,7 +8,7 @@ import { readFile, readdir, mkdtemp, rm, stat } from 'node:fs/promises';
 import { join, resolve, sep, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const root = resolve(new URL('..', import.meta.url).pathname);
+const root = process.env.ATTO_STATIC_ROOT ? resolve(process.env.ATTO_STATIC_ROOT) : resolve(new URL('..', import.meta.url).pathname);
 const mime = { '.html':'text/html', '.css':'text/css', '.js':'text/javascript', '.wasm':'application/wasm', '.md':'text/plain' };
 const requests = [];
 const server = createServer(async (req, res) => {
@@ -160,6 +160,10 @@ try {
   s=await run('error','E_SOURCE_LIMIT');
   assert.equal(s.downloadDisabled,true);
   ok('oversized source fails closed');
+  await source('fnc main() -> int { return '+Array(9000).fill('1').join('+')+'; }');
+  s=await run('error','E_NESTING');
+  assert.equal(s.downloadDisabled,true);
+  ok('9,000-link operator chain is diagnosed, compiler does not crash');
   await source('fnc main() -> int { return 6 * 7; }');
   await run('success','main() → 42');
   ok('recovery from syntax and runtime errors');
