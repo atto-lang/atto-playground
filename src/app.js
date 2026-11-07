@@ -31,6 +31,7 @@ function setRunning(value) {
   runButton.disabled = value;
   stopButton.disabled = !value;
   editor.readOnly = value;
+  selector.disabled = value;
   status.textContent = value ? 'Compiling' : 'Ready';
 }
 async function run() {
@@ -107,7 +108,15 @@ function download() {
   a.click();
   URL.revokeObjectURL(url);
 }
-selector.addEventListener('change', () => { editor.value = samples[selector.value]; diagnostics.textContent = ''; display('Ready to compile.'); });
+function invalidateArtifact() {
+  lastWasm = null;
+  downloadButton.disabled = true;
+  bytesLabel.textContent = '—';
+  diagnostics.textContent = '';
+  if (!working) display('Source changed. Run to compile.');
+}
+editor.addEventListener('input', invalidateArtifact);
+selector.addEventListener('change', () => { editor.value = samples[selector.value]; invalidateArtifact(); });
 runButton.addEventListener('click', run);
 stopButton.addEventListener('click', stop);
 shareButton.addEventListener('click', share);
