@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { inflateSync } from 'node:zlib';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createCompiler } from '../src/compiler.js';
 import { guestImports } from '../src/guest.js';
 
 const projection = JSON.parse(await readFile(new URL('./fixtures/quint-dual-realm-state-projection.json', import.meta.url), 'utf8'));
 const projectionBytes = await readFile(new URL('./fixtures/quint-dual-realm-state-projection.json', import.meta.url));
+const rawTraceBundle = await readFile(new URL('./fixtures/quint-dual-realm-raw-itf.deflate.b64', import.meta.url), 'utf8');
+const rawTraceTexts = JSON.parse(inflateSync(Buffer.from(rawTraceBundle.trim(), 'base64')).toString('utf8'));
 const source = await readFile(new URL('./fixtures/dual_realm_browser.atto', import.meta.url), 'utf8');
 const compilerBytes = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
 const compilerReceipt = JSON.parse(await readFile(new URL('../public/atto_compiler.receipt.json', import.meta.url), 'utf8'));
@@ -38,8 +41,9 @@ test('genuine Quint-generated states one-way refine compiled Atto guest admissio
   assert.equal(projection.producer.artifact_id, 13582817373);
   assert.equal(projection.producer.toolchain, 'Quint 0.32.0 (typescript simulator)');
   assert.equal(projection.producer.status, 'EXECUTED_QUINT_SIMULATION');
-  assert.match(projection.producer.artifact_zip_sha256, /^[0-9a-f]{64}$/);
+  assert.equal(projection.producer.artifact_zip_sha256, '2395238077710fef3584e0fdd7417a10afb457ed5a199a8e3d6df2159785d64d');
   assert.equal(projection.traces.length, 4);
+  assert.equal(rawTraceTexts.length, projection.traces.length, 'all original ITF traces must be bundled');
   assert.equal(sha256(compilerBytes), compilerReceipt.compiler_sha256);
   assert.equal(compilerBytes.length, compilerReceipt.compiler_bytes);
   assert.equal(compilerReceipt.guest_abi, 'atto.browser.guest.v1');
@@ -73,8 +77,20 @@ test('genuine Quint-generated states one-way refine compiled Atto guest admissio
   for (let index = 0; index < projection.traces.length; index++) {
     const trace = projection.traces[index];
     assert.equal(trace.itf, `trace_${index}.itf.json`);
-    assert.match(trace.raw_itf_sha256, /^[0-9a-f]{64}$/);
-    assert.equal(trace.states.length, 21, 'recorded trace must include initial state plus 20 transitions');
+    const rawText = rawTraceTexts[index];
+    assert.equal(sha256(rawText), trace.raw_itf_sha256, 'raw original ITF digest must match the producer receipt');
+    const rawTrace = JSON.parse(rawText);
+    assert.equal(rawTrace['#meta'].format, 'ITF');
+    assert.equal(rawTrace['#meta'].source, 'formal/dual_realm.qnt');
+    assert.deepEqual(rawTrace.vars.slice(0, 3), ['realm_a', 'realm_b', 'accepted']);
+    assert.equal(rawTrace.states.length, 21, 'raw ITF must contain initial state plus 20 model transitions');
+    const projectedBits = rawTrace.states.map(state => {
+      for (const field of ['realm_a', 'realm_b', 'accepted']) {
+        assert.equal(typeof state[field], 'boolean', 'ITF scalar state must be a boolean: ' + field);
+      }
+      return String(4 * Number(state.realm_a) + 2 * Number(state.realm_b) + Number(state.accepted));
+    }).join('');
+    assert.equal(trace.states, projectedBits, 'recorded projection must equal the original byte-verified ITF states');
     originalHashes.push(trace.raw_itf_sha256);
     let prev = null;
     for (const char of trace.states) {
@@ -112,6 +128,8 @@ test('genuine Quint-generated states one-way refine compiled Atto guest admissio
     status: 'passed',
     replay_kind: 'bounded_one_way_predicate_refinement',
     input_projection_sha256: sha256(projectionBytes),
+    original_itf_bundle_sha256: sha256(rawTraceBundle),
+    original_itf_bytes_verified: true,
     quint_model_sha256: projection.producer.quint_model_sha256,
     quint_source_head: projection.producer.source_head,
     quint_run_id: projection.producer.workflow_run_id,
