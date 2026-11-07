@@ -1,0 +1,9 @@
+// Enum cases are preserved as metadata, including #symbol spellings.
+define enum Status as
+  #ready,
+  #done
+end
+
+fnc main() -> int {
+  return 42;
+}

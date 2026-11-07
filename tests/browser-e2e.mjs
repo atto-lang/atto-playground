@@ -111,6 +111,23 @@ try {
   await navigate(base);
   ok('static site resolves under /play/');
 
+
+  // Real browser compiler support for top-level declarations is metadata-only:
+  // type definitions survive Wasm compilation, but no actor/class runtime is faked.
+  for (const [name,expected] of [
+    ['decl-class','42'],['decl-actor','42'],['decl-enum','42'],['decl-types','0']
+  ]) {
+    await example(name);
+    const s=await run('success','main() → '+expected);
+    assert.ok(s.source.includes('define '),name+' source loaded');
+    ok('real browser compiles top-level '+name+' to executable guest Wasm');
+  }
+  await source('define actor Worker as receive(msg: int) { return; } end');
+  await run('error','E_UNSUPPORTED');
+  ok('unimplemented actor receive behavior rejects without generating guest Wasm');
+  await example('hello');
+
+
   const unformatted='fnc main() -> int {\nreturn 42;\n}\n';
   await source(unformatted);
   await click('check-format');

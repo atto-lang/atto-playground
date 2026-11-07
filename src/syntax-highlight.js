@@ -2,7 +2,7 @@
  * ores-truffle-oreslang/oreslang-format (src/lib.rs, keyword_blocks.rs).
  * Only the actual compiler validates syntax; this never evaluates source.
  */
-const KEYWORDS = new Set(('pub private define fnc routine class actor module struct trait interface ' +
+const KEYWORDS = new Set(('pub private define fnc routine class actor enum module struct trait interface ' +
   'final val const let mut return if then elif elseif else fi while do done for loop break continue ' +
   'match switch select over on when default end async await spawn defer recover try catch throw raise panic ' +
   'extends implements as new static suspend trap shared untrusted type where').split(' '));
@@ -35,6 +35,10 @@ export function tokenizeAtto(source) {
         if (text[end++] === quote) break;
       }
       add('string', end); continue;
+    }
+    if (text[i] === '#' && /^[A-Za-z_]/.test(text[i + 1] || '')) {
+      const symbol = /^#[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i));
+      if (symbol) { add('symbol', i + symbol[0].length); continue; }
     }
     let special = false;
     for (const word of HYPHEN_KEYWORDS) {

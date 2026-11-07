@@ -10,6 +10,8 @@ test('formatter-derived keywords and compiler types are highlighted', () => {
   assert.equal(find(source,'int'),'type');
   assert.equal(find('return true;','true'),'literal');
   assert.equal(find('critical-read','critical-read'),'keyword');
+  assert.equal(find('define enum Color as #done end','enum'),'keyword');
+  assert.equal(find('define enum Color as #done end','#done'),'symbol');
 });
 test('strings and nested comments never produce nested keywords', () => {
   const source='// fnc <script>\n/* out /* inside */ more */\n"return // literal"';

@@ -1,0 +1,8 @@
+// Declarative actor: this does not spawn or execute an actor.
+define actor Worker as
+  final int id: 9
+end
+
+fnc main() -> int {
+  return 42;
+}

@@ -52,7 +52,7 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
   const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
-  assert.deepEqual(names, ['conditions.atto', 'error.atto', 'fib.atto', 'hello.atto', 'overflow.atto', 'primes.atto']);
+  assert.deepEqual(names, ['conditions.atto', 'decl-actor.atto', 'decl-class.atto', 'decl-enum.atto', 'decl-types.atto', 'error.atto', 'fib.atto', 'hello.atto', 'overflow.atto', 'primes.atto']);
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
   assert.deepEqual([r.value, r.stdout], [42n, 'Hello from WebAssembly!\n42\n']);
@@ -105,7 +105,7 @@ test('invalid programs fail closed and never return wasm', () => {
     [main('  return 0;') + '\u0000', 'E_NUL'],
     ['fnc helper(): int { return 1; }', 'E_ENTRY'],
     ['fnc f(int a): int {\n  if a > 1 then\n    return 1;\n  fi\n}\n' + main('  return f(0);'), 'E_RETURN'],
-    ['define class P as\nend\n' + main('  return 0;'), 'E_UNSUPPORTED'],
+    ['define class P as\n  get_x(): int { return 1; }\nend\n' + main('  return 0;'), 'E_UNSUPPORTED'],
   ]) {
     const r = compiler.compile(source);
     assert.equal(r.ok, false, source);
@@ -191,4 +191,31 @@ test('stdout truncation never splits a surrogate pair', () => {
   const exact = { text: '', truncated: false };
   appendCapped(exact, 'a'.repeat(STDOUT_LIMIT));
   assert.deepEqual([exact.text.length, exact.truncated], [STDOUT_LIMIT, false]);
+});
+
+
+test('real compiler emits typed top-level declarations in guest custom sections', async () => {
+  const names=['decl-class','decl-actor','decl-enum','decl-types'];
+  for (const name of names) {
+    const src=await readFile(new URL('../examples/'+name+'.atto',import.meta.url),'utf8');
+    const result=compiler.compile(src);
+    assert.equal(result.ok,true,JSON.stringify(result.diagnostics));
+    const mod=new WebAssembly.Module(result.wasm);
+    const sections=WebAssembly.Module.customSections(mod,'atto.declarations.v1');
+    assert.equal(sections.length,1,'declarations retained: '+name);
+    assert.deepEqual(WebAssembly.Module.imports(mod),[]);
+    const output=await execute(result.wasm);
+    assert.equal(output.ok,true,'valid executable guest for '+name);
+    assert.equal(output.value,name==='decl-types'?0n:42n);
+    assert.deepEqual(compiler.compile(src).wasm,result.wasm,'deterministic bytecode for '+name);
+  }
+  for (const src of [
+    'define enum Color as Red, Red end',
+    'define actor Worker as receive(msg: int) {return;} end',
+    'define class Example as end\nfnc main() -> int { let p = new Example(); return 1; }'
+  ]) {
+    const compiled=compiler.compile(src);
+    assert.equal(compiled.ok,false);
+    assert.equal('wasm' in compiled,false);
+  }
 });

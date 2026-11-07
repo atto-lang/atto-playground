@@ -1,0 +1,10 @@
+// Declarative class: typed fields are retained in Wasm metadata.
+// Class construction and methods are not implemented yet.
+define class Counter as
+  final int initial: 5
+  bool ready: true
+end
+
+fnc main() -> int {
+  return 42;
+}

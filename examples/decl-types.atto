@@ -1,0 +1,7 @@
+// Type-only compilation exposes validated declaration metadata.
+define pub struct Point {
+  int x: 3
+  int y: 4
+}
+define interface Shape as end
+define trait Renderable as end

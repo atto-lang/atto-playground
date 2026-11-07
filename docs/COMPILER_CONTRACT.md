@@ -21,7 +21,7 @@ The compiler adds no syntax of its own:
 
 | Area | Admitted |
 | --- | --- |
-| Declarations | `[pub] fnc` / `routine`, `: T` or `-> T`, brace body; parameters `int a`, `int mut a`; arity overloads |
+| Declarations | `[pub] fnc` / `routine`, `define [pub] fnc`, top-level `define class` / `actor` / `enum` / `struct` / `interface` / `trait`; scalar fields and constant initializers; enum cases and `#symbol` cases; emitted typed guest custom section |
 | Entry point | zero-argument `main` returning `int` or `void` |
 | Types | `int`, `bool` / `boolean`, `void` |
 | Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred |
@@ -33,7 +33,7 @@ Anything else is rejected with an `E_*` diagnostic, and a rejected program produ
 
 - `int / int`, whose result type is undecided (spec S-25)
 - strings as values, floats and sized integers
-- classes, actors, `match`, imports and lambdas
+- class instantiation, actor spawning and receive/method execution, inheritance, `match`, imports and lambdas
 
 ## Compiler ABI v2
 
@@ -62,3 +62,7 @@ The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`.
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v1` intentionally permits bounded stdout imports and memory for string literals. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
+
+## Declaration-only milestone and Wasm evidence
+
+The Rust compiler parses named class/actor/enum/struct/interface/trait definitions and preserves them in the versioned `atto.declarations.v1` WebAssembly custom section. Type-only compilation emits a pure no-op `main()` returning 0. This does **not** implement actor scheduling, actor-state isolation, class allocation, methods, enum operations, or tenant protection. `new`, `spawn`, inheritance and method bodies are rejected with explicit diagnostics; their effects are never simulated. Compiler ABI v2 and guest import caps are unchanged. Source: exact commit `f345a9d003836a338ca8a791ed50274177885eef` built by private browser-artifact CI, with declaration conformance and native parity. This is a release candidate only; public compilation must await the independent Pages publishing gate.
