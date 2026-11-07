@@ -48,3 +48,33 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+## Experimental AttoLang browser actors (draft, not deployed)
+
+The playground integration branch provides **Start actor**, **Send message**
+and **Stop** controls. The intended source subset is:
+
+```atto
+define actor Worker as
+    receive(int value): int {
+        return value + 1;
+    }
+end
+```
+
+The compiler mode `compile_actor` emits import-free Wasm
+`receive(i64)->i64`, and the runtime hosts the Wasm instance in a
+dedicated browser Web Worker. Only signed-i64 messages are allowed;
+timeouts, cancellation and faults terminate the worker. Editor changes
+also terminate the running actor, so old code cannot answer new source.
+
+**The pinned production compiler does not yet expose `compile_actor`.**
+The integration must fail closed with `E_ACTOR_UNAVAILABLE` and no Wasm
+artifact until the independently approved compiler PR #10 is vendored,
+digest-pinned and re-verified. Actor-source browser execution remains
+`NOT_EXECUTED` in the ordinary integration branch CI; require
+`ATTO_REQUIRE_ACTOR_SOURCE_E2E=1 npm run test:e2e` against the exact
+new vendor artifact to make the final executed-browser gate mandatory.
+The existing hand-assembled actor guest tests do not substitute for this
+source-to-worker test. No full actor state, source-level spawn, class
+instances or five-backend certification is claimed.
