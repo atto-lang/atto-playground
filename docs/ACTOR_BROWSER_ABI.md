@@ -45,3 +45,25 @@ source-level error/ownership rules. Add compiler-produced Wasm, not hand-built
 fixture, as browser E2E and enforce exact compiler head/tree/receipt provenance.
 Then extend to typed messages, sealed state, mailbox lifecycle, supervision,
 actor groups and backend parity. Never silently erase actor members.
+
+## Playground source-compiler integration (draft)
+
+The `Start actor` button requests the explicit `actor` compilation mode from
+the same **SHA-256-pinned** `src/compiler-worker.js` used for normal `main`.
+The bridge calls the optional ABI v2 export `compile_actor(length)`; it never
+falls back to `compile(length)`. When the approved, vendored compiler lacks the
+new export, the UI must show `E_ACTOR_UNAVAILABLE` and produce no guest Wasm.
+
+When present, `compile_actor` produces `receive(i64)->i64` guest Wasm.
+The compiler bridge and app call `validateActorGuest`, and the actor worker
+validates again before instantiation. `Send message` accepts only signed-i64
+BigInt values. Worker startup is abortable; Stop, source edits, panic and
+deadlines terminate the actor and reject outstanding requests.
+
+**Current release gate:** the vendored compiler predates `compile_actor`.
+Playground CI therefore verifies the rejection path and the separately
+executed worker fixture, but must report the combined source-to-worker
+browser execution as **NOT_EXECUTED**, not a pass. A later, independently
+approved compiler vendor update must run `ATTO_REQUIRE_ACTOR_SOURCE_E2E=1`
+on the exact pinned artifact, with receipt SHA/tree and real Chromium
+execution, before this feature can be certified or published.
