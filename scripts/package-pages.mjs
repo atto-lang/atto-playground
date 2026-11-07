@@ -4,6 +4,7 @@ import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
+import { ACTOR_ABI } from '../src/actor-abi.js';
 import { FORMATTER_SHA256, FORMATTER_BYTES, FORMATTER_SOURCE_COMMIT } from '../src/formatter-pin.js';
 
 export const PAGES_ASSETS = Object.freeze([
@@ -87,8 +88,20 @@ export async function packagePages({
       receipt.compiler_sha256 !== COMPILER_SHA256 ||
       receipt.compiler_bytes !== COMPILER_BYTES ||
       compiler.length !== COMPILER_BYTES ||
-      createHash('sha256').update(compiler).digest('hex') !== receipt.compiler_sha256) {
+      createHash('sha256').update(compiler).digest('hex') !== receipt.compiler_sha256 ||
+      receipt.source_repository !== 'atto-lang/atto-source.rs' ||
+      !/^[a-f0-9]{40}$/.test(receipt.source_head ?? '') ||
+      !/^[a-f0-9]{40}$/.test(receipt.source_tree ?? '') ||
+      receipt.compiler_abi !== 2 || receipt.guest_abi !== 'atto.browser.guest.v1') {
     throw new Error('Compiler receipt, pinned digest or byte length does not match');
+  }
+  // An actor-enabled compiler must explicitly attest to its versioned actor
+  // ABI in the release receipt. A forged claim on the older main-only binary
+  // is rejected, as is an unreceipted new compile_actor export.
+  const compilerExports = WebAssembly.Module.exports(new WebAssembly.Module(compiler));
+  const supportsActor = compilerExports.some(x => x.name === 'compile_actor' && x.kind === 'function');
+  if (supportsActor ? receipt.actor_abi !== ACTOR_ABI : receipt.actor_abi !== undefined) {
+    throw new Error('Compiler actor ABI export and release receipt do not match');
   }
   const formatter = files.find(x => x.name === 'public/oreslang_format.wasm').bytes;
   const formatterReceipt = JSON.parse(files.find(x => x.name === 'public/oreslang_format.receipt.json').bytes.toString('utf8'));
