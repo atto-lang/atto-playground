@@ -26,6 +26,10 @@ This is not production-ready sandboxing or whole-language coverage. All user cod
 
 ## Static release artifact boundary
 
-`scripts/package-pages.mjs` is the **only** approved build path for the GitHub Pages artifact. It copies precisely the explicit HTML, CSS, JS, compiler-Wasm and public contract files, checks every parent component against symlinks, verifies the shipped compiler is valid import-free WebAssembly, and writes `release-manifest.json` containing source SHA and per-file SHA-256. It does not publish `compiler/`, `tests/`, `.github/`, or arbitrary new paths. Browser E2E runs against the staged output, not only the source checkout.
+`scripts/package-pages.mjs` is the **only** approved build path for the GitHub Pages artifact. It copies precisely the explicit HTML, CSS, JS (including guest-contract validation), compiler-Wasm and public contract files, checks every parent component against symlinks, verifies the shipped compiler is valid import-free WebAssembly, and writes `release-manifest.json` containing source SHA and per-file SHA-256. It does not publish `compiler/`, `tests/`, `.github/`, or arbitrary new paths. Browser E2E runs against the staged output, not only the source checkout.
 
 Pages deployment is deliberately restricted to a `push` on `main`; workflow dispatch from an unreviewed branch is not a release path. Repository branch protection, independent approval, hosting eligibility, deployment environment protection and public HTTPS checks remain **administrative release gates** and are not satisfied by this workflow alone.
+
+## Guest module sandbox contract
+
+The runner rejects any Wasm section outside the exact ordered M0 set: type (1), function (3), export (7), code (10). This excludes even unexported memory, tables, globals, element/data segments, custom sections and start hooks. Imports are rejected and the sole allowed export is `main` as a function. The parent worker deadline remains mandatory because a no-memory guest can still loop indefinitely. This is an experimental containment measure, **not** a complete isolation guarantee.

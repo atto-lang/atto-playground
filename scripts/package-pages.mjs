@@ -11,6 +11,7 @@ export const PAGES_ASSETS = Object.freeze([
   'src/compiler.js',
   'src/compiler-worker.js',
   'src/runner-worker.js',
+  'src/guest-contract.js',
   'src/worker-task.js',
   'public/atto_compiler.wasm',
   'docs/COMPILER_CONTRACT.md'
