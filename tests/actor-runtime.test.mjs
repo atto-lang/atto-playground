@@ -68,3 +68,34 @@ test('initialization that never responds is terminated, and resource bounds fail
   await assert.rejects(spawnWasmActor(COUNTER_WASM, { maxMailbox: 100 }), /mailbox bound/);
   await assert.rejects(spawnWasmActor(COUNTER_WASM, { timeoutMs: 0 }), /deadline/);
 });
+
+test('aborting during actor initialization terminates worker and rejects startup', async () => {
+  let terminated = 0;
+  class NeverReadyWorker {
+    postMessage() {}
+    terminate() { terminated++; }
+  }
+  const aborter = new AbortController();
+  const starting = spawnWasmActor(COUNTER_WASM, {
+    WorkerImpl: NeverReadyWorker, timeoutMs: 1000, signal: aborter.signal
+  });
+  aborter.abort();
+  await assert.rejects(starting, /E_ACTOR_CANCELLED/);
+  assert.equal(terminated, 1);
+});
+
+test('pre-aborted signal never posts actor bytes or leaves a worker', async () => {
+  let posted = 0, terminated = 0;
+  class GuardedWorker {
+    postMessage() { posted++; }
+    terminate() { terminated++; }
+  }
+  const aborter = new AbortController();
+  aborter.abort();
+  await assert.rejects(
+    spawnWasmActor(COUNTER_WASM, { WorkerImpl: GuardedWorker, signal: aborter.signal }),
+    /E_ACTOR_CANCELLED/
+  );
+  assert.equal(posted, 0);
+  assert.equal(terminated, 1);
+});
