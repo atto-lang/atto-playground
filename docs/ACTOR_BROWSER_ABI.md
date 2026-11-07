@@ -68,5 +68,14 @@ The release gate verifies metadata consistency, **not** the authenticity of
 an approval or the right to publish private source-built binaries. The
 independent review and explicit public-disclosure decision remain required.
 
+**Accidental-disclosure defense:** `scripts/vendor-compiler.sh` stages the
+actor-enabled binary without changing checked-in public files until both
+source-owned CI metadata and matching operator-supplied `ATTO_PUBLIC_*` values
+are present. The separate Pages workflow checks independently administered
+repository variables before deployment. **Local environment variables are
+not an authentication mechanism**: do not commit/upload the newly vendored
+binary to a public repository without a separately approved release and
+actual authorization to disclose the private-source-built compiler.
+
 Then extend to typed messages, sealed state, mailbox lifecycle, supervision,
 actor groups and backend parity. Never silently erase actor members.
