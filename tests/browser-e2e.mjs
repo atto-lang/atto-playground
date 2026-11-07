@@ -303,6 +303,39 @@ try {
   assert.deepEqual(actorProbe,{values:['40','42'],isolated:'7',invalid:true,closed:true});
   ok('dedicated Web Workers execute real stateful Wasm actor messages with FIFO, isolation and closure');
 
+  // Real Chromium sends raw packets to the dedicated worker. Skipped or
+  // replayed mailbox IDs must fail before invoking the guest Wasm.
+  const sequenceProbe=await js(`(async()=>{
+    const bytes=Uint8Array.from(${JSON.stringify(Array.from(COUNTER_WASM))});
+    async function attempt(replay) {
+      const worker=new Worker('/play/src/actor-worker.js',{type:'module'});
+      function response() { return new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>reject(new Error('actor sequence response deadline')),3000);
+        worker.onmessage=e=>{clearTimeout(timer);resolve(e.data)};
+        worker.onerror=e=>{clearTimeout(timer);reject(new Error('actor sequence worker error'))};
+      }); }
+      try {
+        let pending=response();
+        worker.postMessage({kind:'init',wasm:bytes});
+        if((await pending).kind!=='ready')throw new Error('actor not ready');
+        if(replay) {
+          pending=response();
+          worker.postMessage({kind:'message',id:1,value:7n});
+          if((await pending).kind!=='result')throw new Error('initial receive failed');
+          pending=response();
+          worker.postMessage({kind:'message',id:1,value:9n});
+        } else {
+          pending=response();
+          worker.postMessage({kind:'message',id:2,value:9n});
+        }
+        const failed=await pending;
+        return failed.kind==='fault' && /E_ACTOR_PROTOCOL/.test(failed.message);
+      } finally { worker.terminate(); }
+    }
+    return { skipped:await attempt(false),replayed:await attempt(true) };
+  })()`);
+  assert.deepEqual(sequenceProbe,{skipped:true,replayed:true});
+  ok('real browser worker rejects skipped and replayed actor sequence IDs before guest execution');
   const timeoutProbe=await js(`(async()=>{
     const {spawnWasmActor}=await import('/play/src/actor-runtime.js');
     const actor=await spawnWasmActor(Uint8Array.from(${JSON.stringify(Array.from(LOOP_WASM))}),{timeoutMs:100});
