@@ -26,6 +26,12 @@ Add a `Playground` navigation item in the AttoLang language website that points 
 
 A guest may import only the `atto.print_*` output functions, and stdout is capped. `main` returns i64. Compilation and execution are isolated into disposable browser workers with a bounded time budget. Browser workers are not OS-level isolation. Do not expose arbitrary host imports to user Wasm, and do not claim full-language parity or a production-grade sandbox based on these tests alone.
 
+### Unpublished staging is fail-closed on compiler upgrades
+
+The package builder permits the **unchanged historical pinned compiler** in ordinary CI staging, so pre-release verification of source/worker changes continues without publishing new compiler bytes. Its fixed baseline binds the compiler SHA-256, byte count, source repository, exact commit, and Git tree. Changing any of those fields without the explicitly supplied release-approved compiler digest makes `scripts/package-pages.mjs` refuse to stage `_site`, even if the new receipt and binary agree internally. This is a defense-in-depth guard against accidentally packaging an unapproved compiler, not an approval of the historical binary for publication.
+
+A matching `approvedCompilerSha256` value only satisfies this **local** staging check. Actual public distribution still requires independent review of the exact compiler source head/tree and artifact bytes, administrator-controlled `ATTO_PUBLIC_COMPILER_SHA256`, a manual affirmative workflow dispatch on protected `main`, and the protected `github-pages` deployment environment. Neither a PR comment nor an editable CI argument is independent release authorization. The new source-level actor browser E2E must be executed against the approved vendor artifact rather than inferred from hand-built worker guest tests.
+
 ## GitHub Actions release
 
 1. Independently approve all release PR heads and merge in dependency order. Verify the deployed release uses the exact audited `main` commit.
