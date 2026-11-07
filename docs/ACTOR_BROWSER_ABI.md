@@ -1,6 +1,10 @@
 # Browser Wasm actor substrate v0 — experimental
 
-**Status: executed host/worker prototype, NOT AttoLang `define actor` compilation.**
+**Status: execution substrate and source-to-worker integration bridge.**
+The bridge accepts output from the real Rust `compile_actor` compiler entry point,
+but the currently vendored browser compiler does not yet export that entry
+point. The UI rejects this mismatch with `E_ACTOR_ABI`; it **never** runs
+a scalar `main()` guest as an actor or silently interprets Atto source in JS.
 Source branch tests provide a target execution contract for future typed HIR/MIR
 actor lowering. It does **not** parse or execute `spawn Worker()` from .atto
 source and cannot claim five-backend conformance.
@@ -30,6 +34,12 @@ source and cannot claim five-backend conformance.
 - `src/actor-abi.js` validates the exact source-free module contract.
 - `src/actor-worker.js` owns one Wasm instance and executes mailbox messages.
 - `src/actor-runtime.js` manages admission, deadlines and terminal closure.
+- `src/compiler.js` exposes `compileActor` only via a pinned compiler's real
+  `compile_actor` Wasm export. The default old binary reports `E_ACTOR_ABI`.
+- `src/actor-session.js` validates the guest Wasm ABI *before* spawning the
+  worker; cancellation invalidates in-flight compilation/spawn completions.
+- `src/actor-workbench.js` adds an opt-in actor example, start, send and stop
+  controls while preserving the ordinary program runner.
 - Real browser E2E runs a hand-assembled Wasm counter guest and proves
   independent per-worker state, FIFO updates, malformed message refusal and
   stop/restart behavior. The counter fixture is **not generated from AttoLang**.
@@ -37,11 +47,14 @@ source and cannot claim five-backend conformance.
   ownership transfer, per-tenant isolation, `Result` wire encoding or replay-safe
   runtime handles yet. They remain separate compiler/runtime obligations.
 
-## Next integration: compiler-generated actor guest
+## Next integration: approved compiler-generated actor guest
 
-Lower a narrow `define actor` with scalar `receive(int)->int` through typed
-IR into the exact v0 `receive(i64)->i64` export, while preserving AttoLang
-source-level error/ownership rules. Add compiler-produced Wasm, not hand-built
-fixture, as browser E2E and enforce exact compiler head/tree/receipt provenance.
+The separate AttoLang compiler PR #10 already lowers a narrow `define actor`
+with scalar `receive(int)->int` through typed IR to the v0 `receive(i64)->i64`
+export. Review and merge its dependency chain and then independently authorize
+and pin the compiler artifact before claiming the integrated playground executes
+AttoLang actor source. The playground browser E2E checks `E_ACTOR_ABI` when
+its current pinned compiler has no actor entry; once an authorized compiler is
+vendored, the same browser E2E runs a compiled source actor and verifies `41 → 42`.
 Then extend to typed messages, sealed state, mailbox lifecycle, supervision,
 actor groups and backend parity. Never silently erase actor members.
