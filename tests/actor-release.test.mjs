@@ -15,9 +15,11 @@ test('public packager rejects forged actor ABI and incomplete compiler provenanc
     }
     const receiptPath=join(root,'public/atto_compiler.receipt.json');
     const receipt=JSON.parse(await readFile(receiptPath,'utf8'));
-    // Current pinned compiler does not export compile_actor. A manual metadata
-    // claim must never turn it into an approved actor-capable binary.
-    receipt.actor_abi='atto.browser.actor.scalar.v0';
+    // A forged actor ABI claim must not pass, regardless of whether a later
+    // authorized compiler eventually adds the compile_actor export.
+    const module = new WebAssembly.Module(await readFile(join(root,'public/atto_compiler.wasm')));
+    const actorSupported=WebAssembly.Module.exports(module).some(x=>x.name==='compile_actor'&&x.kind==='function');
+    receipt.actor_abi=actorSupported ? 'atto.browser.actor.WRONG' : 'atto.browser.actor.scalar.v0';
     await writeFile(receiptPath,JSON.stringify(receipt));
     await assert.rejects(packagePages({root}),/Compiler actor ABI export and release receipt do not match/);
     delete receipt.actor_abi;
