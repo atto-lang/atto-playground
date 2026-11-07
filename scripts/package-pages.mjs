@@ -16,6 +16,8 @@ export const PAGES_ASSETS = Object.freeze([
   'src/actor-abi.js',
   'src/actor-worker.js',
   'src/actor-runtime.js',
+  'src/actor-session.js',
+  'src/actor-workbench.js',
   'src/guest.js',
   'src/worker-task.js',
   'src/editor.js',
