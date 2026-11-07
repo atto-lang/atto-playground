@@ -32,6 +32,7 @@ export const PAGES_ASSETS = Object.freeze([
   'public/oreslang_format.wasm',
   'public/oreslang_format.receipt.json',
   'docs/COMPILER_CONTRACT.md',
+  'docs/ACTOR_BROWSER_ABI.md',
   'examples/conditions.atto',
   'examples/error.atto',
   'examples/fib.atto',
