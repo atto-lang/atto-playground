@@ -256,18 +256,51 @@ try {
   s=await run('error','E_TOPLEVEL');
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
-  // Explicit actor source-to-worker bridge rejects before guest execution
-  // while the currently pinned compiler lacks compile_actor. Future approved
-  // pins should make the same input runnable instead of silently erasing it.
+  // This same Chromium fixture proves source -> compiler Wasm -> actor guest
+  // -> dedicated Web Worker once a reviewed compiler pin exports compile_actor.
+  // With the earlier pin it must fail closed without creating guest Wasm.
+  const pinnedCompiler = new WebAssembly.Instance(
+    new WebAssembly.Module(await readFile(join(root,'public/atto_compiler.wasm'))), {}
+  ).exports;
+  const actorCompilerAvailable = typeof pinnedCompiler.compile_actor === 'function';
   await source('define actor Worker as receive(int value): int { return value + 2; } end');
   await click('actor-start');
-  const actorStatus=await poll(async()=>{
-    const state=await js("({text:document.querySelector('#actor-result').textContent,stop:document.querySelector('#actor-stop').disabled})");
-    return state?.text?.includes('E_UNSUPPORTED_ACTOR') && state.stop ? state : null;
-  },'actor compiler capability rejection');
-  assert.match(actorStatus.text,/E_UNSUPPORTED_ACTOR/);
-  assert.equal(await js("document.querySelector('#actor-send').disabled"),true);
-  ok('actor UI explicitly refuses to execute source without approved actor-capable compiler');
+  if (actorCompilerAvailable) {
+    await poll(async()=>{
+      const text=await js("document.querySelector('#actor-result').textContent");
+      return text?.includes('Actor ready in dedicated Web Worker') ? text : null;
+    },'actor compiler -> guest -> dedicated worker startup');
+    assert.equal(await js("document.querySelector('#actor-send').disabled"),false);
+    await click('actor-send');
+    await poll(async()=>{
+      const text=await js("document.querySelector('#actor-result').textContent");
+      return text?.includes('receive(40) → 42') ? text : null;
+    },'actor compiled source reply 42');
+    await js("document.querySelector('#actor-message').value='-1'");
+    await click('actor-send');
+    await poll(async()=>{
+      const text=await js("document.querySelector('#actor-result').textContent");
+      return text?.includes('receive(-1) → 1') ? text : null;
+    },'actor second message reply 1');
+    await source('define actor Bad as receive(bool value): int { return 1; } end');
+    assert.equal(await js("document.querySelector('#actor-send').disabled"),true);
+    assert.match(await js("document.querySelector('#actor-result').textContent"),/source changed/);
+    await click('actor-start');
+    await poll(async()=>{
+      const text=await js("document.querySelector('#actor-result').textContent");
+      return text?.includes('E_UNSUPPORTED') ? text : null;
+    },'typed actor rejection before worker creation');
+    assert.equal(await js("document.querySelector('#actor-send').disabled"),true);
+    ok('real Atto actor source -> Rust compiler Wasm -> actor guest -> dedicated Web Worker; typed negative and generation fencing');
+  } else {
+    const actorStatus=await poll(async()=>{
+      const state=await js("({text:document.querySelector('#actor-result').textContent,stop:document.querySelector('#actor-stop').disabled})");
+      return state?.text?.includes('E_UNSUPPORTED_ACTOR') && state.stop ? state : null;
+    },'actor compiler capability rejection');
+    assert.match(actorStatus.text,/E_UNSUPPORTED_ACTOR/);
+    assert.equal(await js("document.querySelector('#actor-send').disabled"),true);
+    ok('actor UI explicitly refuses source execution until an approved actor-capable compiler is pinned');
+  }
 
   // Execute real Web Workers with separate Wasm instances and FIFO i64 messages.
   // The fixture is hand-assembled Wasm, not yet AttoLang actor source lowering.
