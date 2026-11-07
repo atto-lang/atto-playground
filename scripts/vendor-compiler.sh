@@ -42,6 +42,27 @@ if (actorSupported && (
     actorEvidence.source_ci_compiler_sha256 !== compilerSha)) {
   throw new Error('E_ACTOR_RELEASE: independently reviewed exact CI run/job/artifact and matching SHA-256 are required');
 }
+// A developer invoking the vendor script is otherwise one command away from
+// writing a private-source compiler binary into a public repository branch.
+// Require explicit operator-supplied publication approval values BEFORE
+// staging the final public files. These environment values are NOT themselves
+// independently authenticated: protected GitHub environment approval and
+// independent review remain mandatory before any public PR or deployment.
+if (actorSupported) {
+  const approvalFields = [
+    ['ATTO_PUBLIC_COMPILER_SHA256',compilerSha],
+    ['ATTO_PUBLIC_ACTOR_SOURCE_HEAD',process.env.HEAD_SHA],
+    ['ATTO_PUBLIC_ACTOR_SOURCE_TREE',process.env.TREE_SHA],
+    ['ATTO_PUBLIC_ACTOR_CI_RUN_ID',actorEvidence.source_ci_run_id],
+    ['ATTO_PUBLIC_ACTOR_CI_JOB_ID',actorEvidence.source_ci_job_id],
+    ['ATTO_PUBLIC_ACTOR_CI_ARTIFACT_ID',actorEvidence.source_ci_artifact_id],
+  ];
+  for (const [key,expected] of approvalFields) {
+    if (!expected || process.env[key] !== expected) {
+      throw new Error('E_ACTOR_DISCLOSURE: missing/mismatched explicit local approval for ' + key);
+    }
+  }
+}
 const receipt = {
   schema: 'atto.browser.compiler.vendor.v1',
   source_repository: 'atto-lang/atto-source.rs',
