@@ -39,6 +39,20 @@ test('vendored compiler matches its provenance receipt', () => {
   assert.equal(receipt.guest_abi, 'atto.browser.guest.v1');
 });
 
+test('actor compiler capability is explicit and fails closed for older pinned Wasm', () => {
+  const actorSource = 'define actor Worker as receive(int value): int { return value + 1; } end';
+  const result = compiler.compileActor(actorSource);
+  assert.equal(typeof compiler.supportsActor, 'boolean');
+  if (compiler.supportsActor) {
+    assert.equal(result.ok,true, JSON.stringify(result.diagnostics));
+    assert.equal(WebAssembly.validate(result.wasm),true);
+  } else {
+    assert.equal(result.ok,false);
+    assert.match(result.diagnostics[0].message,/^E_ACTOR_ABI:/);
+    assert.equal('wasm' in result,false,'no source-to-Wasm guest on missing actor ABI');
+  }
+});
+
 test('compiler itself is WebAssembly with no host imports', async () => {
   const mod = await WebAssembly.compile(compilerBytes);
   assert.deepEqual(WebAssembly.Module.imports(mod), []);
