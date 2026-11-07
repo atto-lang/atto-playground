@@ -1,0 +1,42 @@
+name: Playground compiler and guest tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-wasm-execution:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Require exact checkout
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+      - name: Validate compiler receipt, ABI and real guest execution
+        run: npm run verify
+      - name: Browser smoke and full Chromium E2E
+        run: |
+          export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
+          npm run test:browser
+          npm run test:e2e
+      - name: Package allowlisted public assets and test deployed shape
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
+          node scripts/package-pages.mjs _site
+          ATTO_STATIC_ROOT="$PWD/_site" npm run test:e2e
+          test -s _site/release-manifest.json
+          sha256sum public/atto_compiler.wasm
+          cat public/atto_compiler.receipt.json
