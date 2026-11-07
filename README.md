@@ -45,6 +45,10 @@ Choose **Custom +** in the Program selector to keep the current editor text as a
 
 The highlighting mirror uses conservative token classes based on the Oreslang formatter's lexical/comment rules. It cannot replace the formatter's Rust semantics or validate syntax. Real typing and assistive access remain on the native textarea; the highlight layer only accepts DOM text nodes and has no HTML interpreter.
 
+## Canonical browser formatter
+
+The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
 ## Portable saved-program backups
 
 The browser's **Export JSON** and **Import JSON** controls use an explicitly versioned offline backup format (30 named programs maximum; 64 KiB source per program; 512 KiB backup cap). Import validates all entries before a single localStorage write. Name conflicts require explicit overwrite approval; otherwise no entries are changed. Saves and imports fail closed on corrupted existing localStorage rather than silently erasing it. Switching away from modified custom code prompts before discarding edits; browser tab-close dialogs are intentionally not enabled because their behavior is inconsistent across browsers. Export a backup before clearing browser data. These features do not upload user code.

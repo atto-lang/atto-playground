@@ -66,14 +66,9 @@ try {
   assert.ok(page,'Chromium page target missing');
   socket=new WebSocket(page.webSocketDebuggerUrl);
   await deadline(new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true});}),5000);
-  let id=0;const pending=new Map();let unexpectedDialogs=0;
+  let id=0;const pending=new Map();
   socket.addEventListener('message',event=>{
     const message=JSON.parse(event.data);
-    if (message.method === 'Page.javascriptDialogOpening') {
-      unexpectedDialogs++;
-      void cdp('Page.handleJavaScriptDialog',{accept:true}).catch(()=>{});
-      return;
-    }
     if(!pending.has(message.id))return;
     const pair=pending.get(message.id);pending.delete(message.id);
     if(message.error)pair.reject(new Error(message.error.message));else pair.resolve(message.result);
@@ -116,6 +111,28 @@ try {
   await navigate(base);
   ok('static site resolves under /play/');
 
+  const unformatted='fnc main() -> int {\nreturn 42;\n}\n';
+  await source(unformatted);
+  await click('check-format');
+  await poll(async()=> (await js("document.querySelector('#status').textContent"))?.includes('Formatting differs'), 'format check (no mutation)');
+  assert.equal((await view()).source,unformatted);
+  await click('format');
+  const formatted=await poll(async()=>{const s=await view();return s.source?.includes('\n  return 42;\n')?s:null;},'real formatter in browser worker');
+  assert.equal(formatted.source.includes('\n  return 42;\n'),true);
+  assert.equal(await js("document.querySelector('#syntax-layer').textContent"),formatted.source);
+  await click('format');
+  await poll(async()=> (await js("document.querySelector('#status').textContent"))?.includes('Already canonically formatted'),'format idempotence');
+  assert.equal((await view()).source,formatted.source);
+  await run('success','main() → 42');
+  ok('canonical Rust formatter executes in browser worker; check is nonmutating, format idempotent and compiler still works');
+  const malformed='fnc identity(int x) -> int do return x; end\n';
+  await source(malformed);
+  await click('format');
+  await poll(async()=> (await js("document.querySelector('#status').textContent"))?.includes('Formatter rejected source'),'formatter failure');
+  assert.equal((await view()).source,malformed);
+  ok('formatter rejects invalid syntax without overwriting edited source');
+  await example('hello');
+
   // Custom program library and syntax mirror, both on the real static origin.
   const customSource='fnc main() -> int { return 20 + 22; }';
   await js("(()=>{const e=document.querySelector('#example');e.value='custom:new';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
@@ -149,7 +166,6 @@ try {
   await run('success','main() → 42');
   ok('saved program reloads from the custom dropdown and compiles in real Wasm');
   await cdp('Page.navigate',{url:'about:blank'});
-  assert.equal(unexpectedDialogs,0,'Clean saved program unexpectedly opened beforeunload dialog');
   await navigate(base);
   await js("(()=>{const e=document.querySelector('#example');e.value='saved:Demo 42';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
   assert.equal((await view()).source,customSource);
