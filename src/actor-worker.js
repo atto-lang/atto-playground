@@ -6,6 +6,7 @@ import { isI64, validateActorGuest } from './actor-abi.js';
 
 let instance = null;
 let starting = false;
+let nextMessageId = 1;
 function terminal(message) {
   try { self.postMessage({ kind: 'fault', message: String(message).slice(0, 512) }); }
   finally { self.close(); }
@@ -24,9 +25,13 @@ self.onmessage = async ({ data }) => {
     }
     return;
   }
-  if (data?.kind !== 'message' || !Number.isSafeInteger(data.id) || data.id <= 0 || !isI64(data.value)) {
-    return terminal('E_ACTOR_PROTOCOL: invalid message');
+  if (data?.kind !== 'message' || !Number.isSafeInteger(data.id) ||
+      data.id !== nextMessageId || !isI64(data.value)) {
+    return terminal('E_ACTOR_PROTOCOL: invalid, replayed or skipped message sequence');
   }
+  // Fence every guest invocation before executing it. A duplicate or skipped
+  // host message must never mutate the guest's private actor state.
+  nextMessageId++;
   try {
     // Synchronous guest execution makes each worker's mailbox single-writer,
     // sequential and FIFO. Termination from the host stops non-cooperative code.
