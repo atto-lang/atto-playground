@@ -10,7 +10,7 @@ Expected default project URL after successful deployment (not verified live yet)
 
 `https://atto-lang.github.io/atto-playground/`
 
-The workflow regenerates the compiler from checked-in C source before publication. Do not treat the committed `public/atto_compiler.wasm` binary alone as reproducible release evidence across different unpinned Clang distributions. Verify the build's toolchain version, exact source head, checked-out tree, executed test steps, and resulting Wasm SHA-256.
+The workflow publishes the vendored `public/atto_compiler.wasm` only after `npm run verify` confirms it matches `public/atto_compiler.receipt.json`. The receipt names the atto-source.rs source head and tree, the pinned Rust toolchain and the SHA-256. `scripts/vendor-compiler.sh` reproduces the same bytes from that commit.
 
 ## Custom subdomain
 
@@ -24,4 +24,4 @@ Add a `Playground` navigation item in the AttoLang language website that points 
 
 ## Security
 
-This M0 guest has no imports or memory and returns i32. Compilation and execution are isolated into disposable browser workers with a bounded time budget. Browser workers are not OS-level isolation. Do not expose arbitrary host imports to user Wasm, and do not claim full-language parity or a production-grade sandbox based on M0 tests alone.
+A guest may import only the `atto.print_*` output functions, and stdout is capped. `main` returns i64. Compilation and execution are isolated into disposable browser workers with a bounded time budget. Browser workers are not OS-level isolation. Do not expose arbitrary host imports to user Wasm, and do not claim full-language parity or a production-grade sandbox based on these tests alone.

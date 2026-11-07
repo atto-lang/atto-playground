@@ -5,11 +5,11 @@
   "version": "0.1.0",
   "description": "A serverless AttoLang source-to-WebAssembly playground",
   "scripts": {
-    "build:compiler": "sh scripts/build-compiler.sh",
+    "vendor:compiler": "sh scripts/vendor-compiler.sh",
     "test": "node --test tests/*.test.mjs",
     "test:browser": "node tests/browser-smoke.mjs",
     "test:e2e": "node tests/browser-e2e.mjs",
-    "verify": "npm run build:compiler && npm test",
+    "verify": "npm test",
     "serve": "python3 -m http.server 8080"
   },
   "engines": { "node": ">=20" }

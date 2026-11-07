@@ -1,10 +1,17 @@
 import { createWorkerTask } from './worker-task.js';
-const samples = {
-  arithmetic: `// AttoLang · integer arithmetic\nfnc main() -> int {\n  const int x = 6;\n  int y = 7;\n  return x * y;\n}`,
-  immutable: `// Immutable by default: const is optional\nfnc main() -> int {\n  int x = 7;\n  const y = 5;\n  const int z = 3;\n  return x * y + z;\n}`,
-  mutable: `// Explicit rebinding uses let or mut\nfnc main() -> int {\n  let int counter = 40;\n  counter = counter + 2;\n  return counter;\n}`,
-  error: `// An immutable binding cannot be reassigned\nfnc main() -> int {\n  int x = 10;\n  x = 20;\n  return x;\n}`
-};
+// Example programs live in /examples as real .atto files; each one is also
+// compiled by the Java reference compiler in the differential test suite.
+const EXAMPLES = ['hello', 'fib', 'primes', 'conditions', 'overflow', 'error'];
+const samples = {};
+async function loadSample(name) {
+  if (!EXAMPLES.includes(name)) throw new Error('unknown example');
+  if (!samples[name]) {
+    const response = await fetch(new URL(`../examples/${name}.atto`, import.meta.url));
+    if (!response.ok) throw new Error(`example download failed (${response.status})`);
+    samples[name] = await response.text();
+  }
+  return samples[name];
+}
 const editor = document.querySelector('#source');
 const output = document.querySelector('#output');
 const summary = document.querySelector('#summary');
@@ -59,11 +66,12 @@ async function run() {
     status.textContent = 'Executing';
     const executed = await workerTask.request(new URL('./runner-worker.js', import.meta.url), { wasm: lastWasm }, 3000);
     if (generation !== runGeneration) return;
+    const printed = executed.stdout ? executed.stdout + (executed.truncated ? '\n[output truncated]\n' : '') + (executed.stdout.endsWith('\n') ? '' : '\n') : '';
     if (!executed.ok) {
-      display(executed.message, 'error');
+      display(`${printed}${executed.message}`, 'error');
       return;
     }
-    display(`main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms`, 'success');
+    display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms`, 'success');
   } catch (error) {
     if (generation === runGeneration) display(`E_HOST: ${error.message}`, 'error');
   } finally { if (generation === runGeneration) setRunning(false); }
@@ -116,14 +124,21 @@ function invalidateArtifact() {
   if (!working) display('Source changed. Run to compile.');
 }
 editor.addEventListener('input', invalidateArtifact);
-selector.addEventListener('change', () => { editor.value = samples[selector.value]; invalidateArtifact(); });
+selector.addEventListener('change', async () => {
+  try { editor.value = await loadSample(selector.value); } catch (error) { display(`E_HOST: ${error.message}`, 'error'); return; }
+  invalidateArtifact();
+});
 runButton.addEventListener('click', run);
 stopButton.addEventListener('click', stop);
 shareButton.addEventListener('click', share);
 downloadButton.addEventListener('click', download);
-editor.value = fromHash() ?? samples.arithmetic;
-status.textContent = 'Ready';
-// Only used by the automated, local browser test; does not change normal browsing.
-const smoke = new URLSearchParams(location.search).get('smoke');
-if (smoke === '1') run();
-if (smoke === 'error') { selector.value = 'error'; editor.value = samples.error; run(); }
+status.textContent = 'Loading';
+(async () => {
+  const shared = fromHash();
+  try { editor.value = shared ?? await loadSample('hello'); } catch (error) { display(`E_HOST: ${error.message}`, 'error'); }
+  status.textContent = 'Ready';
+  // Only used by the automated, local browser test; does not change normal browsing.
+  const smoke = new URLSearchParams(location.search).get('smoke');
+  if (smoke === '1') run();
+  if (smoke === 'error') { selector.value = 'error'; editor.value = await loadSample('error'); run(); }
+})();
