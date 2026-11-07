@@ -256,6 +256,33 @@ try {
   s=await run('error','E_TOPLEVEL');
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
+  // The new source-to-worker UI must never invent actor execution if the
+  // pinned compiler lacks compile_actor. When it is approved and vendored,
+  // exercise the SAME controls as a real source-to-worker positive E2E.
+  const actorCompilerAvailable=await js(`(async()=>{
+    const bytes=await (await fetch('/play/public/atto_compiler.wasm')).arrayBuffer();
+    const wasm=new WebAssembly.Module(bytes);
+    return WebAssembly.Module.exports(wasm).some(e=>e.name==='compile_actor'&&e.kind==='function');
+  })()`);
+  await click('actor-example');
+  assert.match((await view()).source,/define actor Worker/);
+  await click('actor-start');
+  if (!actorCompilerAvailable) {
+    await poll(async()=>await js("document.querySelector('#actor-output').textContent.includes('E_ACTOR_ABI')"),'old pinned actor compiler rejected');
+    assert.equal(await js("document.querySelector('#actor-send').disabled"),true);
+    assert.equal(await js("document.querySelector('#actor-stop').disabled"),true);
+    ok('source-to-worker UI fails closed on pinned compiler lacking compile_actor');
+  } else {
+    await poll(async()=>await js("document.querySelector('#actor-status').textContent.includes('Actor ready')"),'actor compiler and worker ready');
+    await click('actor-send');
+    await poll(async()=>await js("document.querySelector('#actor-output').textContent.includes('receive(41) → 42')"),'real source actor sends 41 and receives 42');
+    await click('actor-stop');
+    assert.equal(await js("document.querySelector('#actor-send').disabled"),true);
+    ok('real editor actor source compiled via pinned Wasm, executed in dedicated browser Web Worker and terminated');
+  }
+  // Editing stops an actor and invalidates any stale worker response.
+  await source('pub fnc main(): int { return 42; }');
+
   // Execute real Web Workers with separate Wasm instances and FIFO i64 messages.
   // The fixture is hand-assembled Wasm, not yet AttoLang actor source lowering.
   const actorProbe=await js(`(async()=>{
