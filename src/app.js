@@ -1,4 +1,6 @@
 import { createWorkerTask } from './worker-task.js';
+import { spawnWasmActor } from './actor-runtime.js';
+import { isI64, validateActorGuest } from './actor-abi.js';
 import { installEditor } from './editor.js';
 import { formatDiagnostic, formatWasm } from './ui.js';
 import { installProgramPicker } from './program-picker.js';
@@ -20,6 +22,10 @@ const editor = document.querySelector('#source');
 const output = document.querySelector('#output');
 const summary = document.querySelector('#summary');
 const runButton = document.querySelector('#run');
+const runActorButton = document.querySelector('#run-actor');
+const actorValueInput = document.querySelector('#actor-value');
+const sendActorButton = document.querySelector('#send-actor');
+const actorHint = document.querySelector('#actor-hint');
 const stopButton = document.querySelector('#stop');
 const selector = document.querySelector('#example');
 const shareButton = document.querySelector('#share');
@@ -74,6 +80,11 @@ const jumpTo = installEditor(editor, {
 });
 let working = false;
 let formatting = false;
+let actorHandle = null;
+let actorStartAbort = null;
+let sendingActor = false;
+let actorTranscript = '';
+let lastArtifactMode = 'main';
 const workerTask = createWorkerTask();
 const formatterTask = createWorkerTask();
 const FORMAT_DEADLINE_MS = 6000;
@@ -87,20 +98,28 @@ function display(message, kind = 'neutral') {
   summary.textContent = kind === 'error' ? 'Failed' : kind === 'success' ? 'Completed' : 'Ready';
   summary.dataset.kind = kind;
 }
+function updateActorControls() {
+  runButton.disabled = working || formatting || !!actorHandle;
+  runActorButton.disabled = working || formatting || !!actorHandle;
+  stopButton.disabled = !working && !actorHandle;
+  sendActorButton.disabled = working || formatting || !actorHandle || sendingActor;
+  actorValueInput.disabled = working || formatting || !actorHandle || sendingActor;
+  actorHint.textContent = actorHandle ? 'Actor is running in a dedicated Web Worker. Stop to terminate.' : 'Start an actor before sending messages.';
+}
 function setRunning(value) {
   working = value;
-  runButton.disabled = value;
-  stopButton.disabled = !value;
   editor.readOnly = value;
   selector.disabled = value;
   formatButton.disabled = value;
   checkFormatButton.disabled = value;
+  updateActorControls();
   if (value) status.textContent = 'Compiling';
   else if (status.textContent === 'Compiling' || status.textContent === 'Executing') status.textContent = 'Ready';
 }
 async function run() {
-  if (working || formatting) return;
+  if (working || formatting || actorHandle) return;
   const generation = ++runGeneration;
+  lastArtifactMode = 'main';
   setRunning(true);
   lastWasm = null;
   downloadButton.disabled = true;
@@ -111,7 +130,7 @@ async function run() {
   display('Compiling Atto source inside WebAssembly…');
   try {
     const start = performance.now();
-    const compiled = await workerTask.request(new URL('./compiler-worker.js', import.meta.url), { source: editor.value }, COMPILE_DEADLINE_MS, 'Compilation');
+    const compiled = await workerTask.request(new URL('./compiler-worker.js', import.meta.url), { source: editor.value, mode: 'main' }, COMPILE_DEADLINE_MS, 'Compilation');
     if (generation !== runGeneration) return;
     if (!compiled.ok) {
       showDiagnostic(compiled.diagnostics?.[0]);
@@ -143,6 +162,101 @@ async function run() {
   } finally { if (generation === runGeneration) setRunning(false); }
 }
 
+
+/** Compile real Atto actor source using the pinned compiler, then start an
+ * import-free Wasm module in the source-free, bounded actor worker substrate.
+ * An older pinned compiler must return E_ACTOR_UNAVAILABLE, never main Wasm.
+ */
+async function runActor() {
+  if (working || formatting || actorHandle) return;
+  const generation = ++runGeneration;
+  lastArtifactMode = 'actor';
+  setRunning(true);
+  lastWasm = null;
+  downloadButton.disabled = true;
+  diagnostics.textContent = 'No diagnostics.';
+  wasmPreview.textContent = 'No compiled artifact yet.';
+  bytesLabel.textContent = '—';
+  selectTab('console');
+  display('Compiling actor source in the integrity-pinned Wasm compiler…');
+  try {
+    const compiled = await workerTask.request(
+      new URL('./compiler-worker.js', import.meta.url),
+      { source: editor.value, mode: 'actor' }, COMPILE_DEADLINE_MS, 'Actor compilation'
+    );
+    if (generation !== runGeneration) return;
+    if (!compiled?.ok) {
+      showDiagnostic(compiled?.diagnostics?.[0]);
+      status.textContent = 'Actor compiler error';
+      selectTab('diagnostics');
+      display('Actor compilation failed. No executable actor artifact was produced.', 'error');
+      return;
+    }
+    // Validate before spawning, again inside actor-worker. Never run a main
+    // guest as an actor or grant print/file/network imports to actor guests.
+    validateActorGuest(compiled.wasm);
+    actorStartAbort = new AbortController();
+    status.textContent = 'Starting actor';
+    const handle = await spawnWasmActor(compiled.wasm, {
+      timeoutMs: RUN_DEADLINE_MS, signal: actorStartAbort.signal
+    });
+    if (generation !== runGeneration) { handle.close(); return; }
+    actorHandle = handle;
+    actorStartAbort = null;
+    lastWasm = compiled.wasm;
+    wasmPreview.textContent = formatWasm(lastWasm);
+    bytesLabel.textContent = `${lastWasm.byteLength} bytes`;
+    downloadButton.disabled = false;
+    actorTranscript = 'Actor ready (receive(int) → int). Send a signed 64-bit integer.\\n';
+    status.textContent = 'Actor ready';
+    display(actorTranscript, 'success');
+  } catch (error) {
+    if (generation === runGeneration) {
+      status.textContent = 'Actor worker error';
+      display('E_ACTOR_HOST: ' + String(error?.message || error), 'error');
+    }
+  } finally {
+    actorStartAbort = null;
+    if (generation === runGeneration) setRunning(false);
+  }
+}
+
+async function sendActor() {
+  if (!actorHandle || working || sendingActor) return;
+  const raw = actorValueInput.value.trim();
+  if (!/^-?(?:0|[1-9][0-9]*)$/.test(raw)) {
+    display('E_ACTOR_MESSAGE: enter a decimal signed 64-bit integer.', 'error');
+    return;
+  }
+  let value;
+  try { value = BigInt(raw); }
+  catch { display('E_ACTOR_MESSAGE: invalid integer.', 'error'); return; }
+  if (!isI64(value)) {
+    display('E_ACTOR_MESSAGE: integer outside signed 64-bit range.', 'error');
+    return;
+  }
+  const handle = actorHandle;
+  const generation = runGeneration;
+  sendingActor = true;
+  updateActorControls();
+  try {
+    const result = await handle.send(value);
+    if (generation !== runGeneration || actorHandle !== handle) return;
+    actorTranscript = (actorTranscript + `receive(${value}) → ${result}\\n`).slice(-4096);
+    status.textContent = 'Actor responded';
+    display(actorTranscript, 'success');
+  } catch (error) {
+    if (generation !== runGeneration || actorHandle !== handle) return;
+    actorHandle.close();
+    actorHandle = null;
+    status.textContent = 'Actor faulted';
+    display(actorTranscript + 'E_ACTOR_RUNTIME: ' + String(error?.message || error), 'error');
+  } finally {
+    sendingActor = false;
+    updateActorControls();
+  }
+}
+
 /** Run the actual Rust formatter in an isolated, time-limited browser worker.
  * No mutation happens until the worker returns a successful complete result.
  * Browser undo is preserved with native insertText where supported.
@@ -151,7 +265,8 @@ async function formatCode(checkOnly) {
   if (working || formatting) return;
   const before = editor.value, start = editor.selectionStart, end = editor.selectionEnd;
   formatting = true;
-  formatButton.disabled = checkFormatButton.disabled = runButton.disabled = true;
+  formatButton.disabled = checkFormatButton.disabled = runButton.disabled = runActorButton.disabled = true;
+  updateActorControls();
   editor.readOnly = true;
   selector.disabled = true;
   status.textContent = checkOnly ? 'Checking canonical formatting' : 'Formatting locally';
@@ -204,17 +319,23 @@ async function formatCode(checkOnly) {
     selector.disabled = working;
     runButton.disabled = working;
     formatButton.disabled = checkFormatButton.disabled = working;
+    updateActorControls();
   }
 }
 
 function stop() {
-  if (!working) return;
+  if (!working && !actorHandle) return;
   // Invalidate the old run before resolving its pending worker request.
   runGeneration++;
+  actorStartAbort?.abort();
+  actorStartAbort = null;
   workerTask.cancel();
+  const hadActor = !!actorHandle;
+  actorHandle?.close();
+  actorHandle = null;
   setRunning(false);
   status.textContent = 'Cancelled';
-  display('Compilation or execution cancelled.', 'neutral');
+  display(hadActor ? 'Actor terminated; mailbox closed.' : 'Compilation or execution cancelled.', 'neutral');
 }
 function fromHash() {
   const match = /^#code=([A-Za-z0-9_-]{1,5500})$/.exec(location.hash);
@@ -244,12 +365,20 @@ function download() {
   const blob = new Blob([lastWasm], { type: 'application/wasm' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'main.wasm';
+  a.href = url; a.download = lastArtifactMode === 'actor' ? 'actor.wasm' : 'main.wasm';
   a.click();
   // Avoid cancelling a pending browser download by revoking synchronously.
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 function invalidateArtifact() {
+  // The source of a running actor is immutable. Editing terminates that
+  // generation so no old actor can respond as if it were the new source.
+  if (actorHandle) {
+    runGeneration++;
+    actorHandle.close();
+    actorHandle = null;
+    updateActorControls();
+  }
   lastWasm = null;
   downloadButton.disabled = true;
   bytesLabel.textContent = '—';
@@ -264,12 +393,16 @@ function invalidateArtifact() {
 editor.addEventListener('input', invalidateArtifact);
 
 runButton.addEventListener('click', run);
+runActorButton.addEventListener('click', runActor);
+sendActorButton.addEventListener('click', sendActor);
+actorValueInput.addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); sendActor(); } });
 formatButton.addEventListener('click', () => formatCode(false));
 checkFormatButton.addEventListener('click', () => formatCode(true));
 stopButton.addEventListener('click', stop);
 shareButton.addEventListener('click', share);
 downloadButton.addEventListener('click', download);
 status.textContent = 'Loading';
+updateActorControls();
 (async () => {
   const shared = fromHash();
   try { await picker.initialize(shared); } catch (error) { display(`E_HOST: ${error.message}`, 'error'); }
