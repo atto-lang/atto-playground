@@ -13,7 +13,8 @@ async function fixture(t) {
   for (const name of PAGES_ASSETS) {
     const path = join(root, name);
     await mkdir(dirname(path), { recursive: true });
-    const checked = ['public/atto_compiler.wasm','public/atto_compiler.receipt.json','src/compiler-pin.js'].includes(name);
+    const checked = ['public/atto_compiler.wasm','public/atto_compiler.receipt.json','src/compiler-pin.js',
+      'public/oreslang_format.wasm','public/oreslang_format.receipt.json','src/formatter-pin.js'].includes(name);
     await writeFile(path, checked ? await readFile(new URL('../'+name, import.meta.url)) : 'safe ' + name);
   }
   return root;
@@ -89,4 +90,18 @@ test('Pages staging path cannot be a symlink', async t => {
   await mkdir(join(root, 'malicious'));
   await symlink('malicious', join(root, '_site'));
   await assert.rejects(packagePages({ root }), /Pages staging directory cannot be a symlink/);
+});
+
+
+test('forged formatter receipt or Wasm is rejected before staging', async t => {
+  const root = await fixture(t);
+  const receiptPath=join(root,'public/oreslang_format.receipt.json');
+  const receipt=JSON.parse(await readFile(receiptPath,'utf8'));
+  receipt.wasm_sha256='0'.repeat(64);
+  await writeFile(receiptPath,JSON.stringify(receipt));
+  await assert.rejects(packagePages({root}),/Formatter provenance, length or SHA-256 mismatch/);
+  await writeFile(receiptPath,await readFile(new URL('../public/oreslang_format.receipt.json',import.meta.url)));
+  await writeFile(join(root,'public/oreslang_format.wasm'),'bad-wasm');
+  await assert.rejects(packagePages({root}),/Invalid compiler Wasm/);
+  await assert.rejects(readdir(join(root,'_site')),/ENOENT/);
 });
