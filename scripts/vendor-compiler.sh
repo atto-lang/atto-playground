@@ -19,6 +19,7 @@ import crypto from 'node:crypto';
 const bytes = fs.readFileSync('public/atto_compiler.wasm');
 const module = new WebAssembly.Module(bytes);
 const { exports: api } = new WebAssembly.Instance(module, {});
+const actorSupported = WebAssembly.Module.exports(module).some(x => x.name === 'compile_actor' && x.kind === 'function');
 const receipt = {
   schema: 'atto.browser.compiler.vendor.v1',
   source_repository: 'atto-lang/atto-source.rs',
@@ -28,6 +29,7 @@ const receipt = {
   target: 'wasm32-unknown-unknown',
   compiler_abi: api.abi_version(),
   guest_abi: 'atto.browser.guest.v1',
+  ...(actorSupported ? { actor_abi: 'atto.browser.actor.scalar.v0' } : {}),
   compiler_sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
   compiler_bytes: bytes.length,
 };
