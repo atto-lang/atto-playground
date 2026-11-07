@@ -2,6 +2,7 @@
  * No Playwright package needed; only Node 22 and a Chromium executable.
  */
 import assert from 'node:assert/strict';
+import { COUNTER_WASM, LOOP_WASM } from './actor-fixture.mjs';
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
 import { readFile, readdir, mkdtemp, rm, stat } from 'node:fs/promises';
