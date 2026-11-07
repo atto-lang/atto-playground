@@ -1,0 +1,31 @@
+name: Playground compiler and guest tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-wasm-execution:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install WebAssembly linker
+        run: sudo apt-get update && sudo apt-get install -y clang lld
+      - name: Check exact checkout and compiler tree
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          node --version
+          clang --version
+      - name: Build actual compiler Wasm and run guest fixtures
+        run: npm run verify
+      - name: Fail on stale compiler artifact
+        run: git diff --exit-code -- public/atto_compiler.wasm
+      - name: Record artifact hash
+        run: sha256sum public/atto_compiler.wasm
