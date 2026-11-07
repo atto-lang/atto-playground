@@ -19,7 +19,7 @@ export async function spawnWasmActor(wasm, {
 
   const worker = new WorkerImpl(new URL('./actor-worker.js', import.meta.url), { type: 'module' });
   const pending = new Map();
-  let ready = false, closed = false, nextId = 0, initTimer;
+  let ready = false, closed = false, nextId = 0, nextResultId = 1, initTimer;
   let readyResolve, readyReject;
   const started = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
 
@@ -59,6 +59,14 @@ export async function spawnWasmActor(wasm, {
       terminate(new Error('E_ACTOR_PROTOCOL: unsolicited/duplicate response'));
       return;
     }
+    // Mailbox admission is FIFO and each guest receive() is synchronous.
+    // Accepting id=N while an earlier id is unresolved would certify a
+    // forged/out-of-order result and leave prior message state ambiguous.
+    if (data.id !== nextResultId || pending.keys().next().value !== data.id) {
+      terminate(new Error('E_ACTOR_PROTOCOL: out-of-order actor response'));
+      return;
+    }
+    nextResultId++;
     clearTimeout(task.timer);
     pending.delete(data.id);
     task.resolve(data.value);
