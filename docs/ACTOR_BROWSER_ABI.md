@@ -56,5 +56,14 @@ and pin the compiler artifact before claiming the integrated playground executes
 AttoLang actor source. The playground browser E2E checks `E_ACTOR_ABI` when
 its current pinned compiler has no actor entry; once an authorized compiler is
 vendored, the same browser E2E runs a compiled source actor and verifies `41 → 42`.
+Future release admission requires the exact source commit and tree, CI run, job,
+artifact ID, and the compiler artifact's SHA-256 to match the reviewed
+receipt and independently controlled release variables. The first actor-enabled
+vendor update must supply source-owned CI receipt metadata; GitHub Actions
+approval variables are not created automatically by a green test run.
+The release gate verifies metadata consistency, **not** the authenticity of
+an approval or the right to publish private source-built binaries. The
+independent review and explicit public-disclosure decision remain required.
+
 Then extend to typed messages, sealed state, mailbox lifecycle, supervision,
 actor groups and backend parity. Never silently erase actor members.
