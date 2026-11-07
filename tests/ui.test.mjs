@@ -28,5 +28,5 @@ test('Wasm metadata never exposes more than 32 preview bytes', () => {
   assert.match(text,/Size: 70 bytes/);
   assert.match(text,/00 61 73 6d/);
   assert.match(text,/preview limited to 32 bytes/);
-  assert.equal(text.match(/\b[0-9a-f]{2}\b/g).length,32);
+  assert.equal(text.split('bytes:\n')[1].split('\n')[0].trim().split(' ').length,32);
 });

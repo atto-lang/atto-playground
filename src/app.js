@@ -181,7 +181,7 @@ function invalidateArtifact() {
 editor.addEventListener('input', invalidateArtifact);
 selector.addEventListener('change', async () => {
   try { editor.value = await loadSample(selector.value); } catch (error) { display(`E_HOST: ${error.message}`, 'error'); return; }
-  invalidateArtifact();
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
 });
 runButton.addEventListener('click', run);
 stopButton.addEventListener('click', stop);
@@ -191,6 +191,7 @@ status.textContent = 'Loading';
 (async () => {
   const shared = fromHash();
   try { editor.value = shared ?? await loadSample('hello'); } catch (error) { display(`E_HOST: ${error.message}`, 'error'); }
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
   status.textContent = 'Ready';
   // Only used by the automated, local browser test; does not change normal browsing.
   const smoke = new URLSearchParams(location.search).get('smoke');
