@@ -68,3 +68,58 @@ test('initialization that never responds is terminated, and resource bounds fail
   await assert.rejects(spawnWasmActor(COUNTER_WASM, { maxMailbox: 100 }), /mailbox bound/);
   await assert.rejects(spawnWasmActor(COUNTER_WASM, { timeoutMs: 0 }), /deadline/);
 });
+
+
+test('host fails closed on a valid but out-of-order reply ID while earlier send remains pending', async () => {
+  let worker;
+  class ReorderedWorker {
+    constructor() { this.messages = []; this.stopped = false; worker = this; }
+    postMessage(packet) {
+      if (packet.kind === 'init') {
+        queueMicrotask(() => this.onmessage?.({data:{kind:'ready'}}));
+      } else if (packet.kind === 'message') {
+        this.messages.push(packet);
+        if (this.messages.length === 2) {
+          const second=this.messages[1];
+          // Both IDs are genuinely pending. Returning the second one first
+          // must not be accepted as a valid actor result.
+          queueMicrotask(() => this.onmessage?.({data:{
+            kind:'result',id:second.id,value:second.value
+          }}));
+        }
+      }
+    }
+    terminate() { this.stopped = true; }
+  }
+  const actor = await spawnWasmActor(COUNTER_WASM,{WorkerImpl:ReorderedWorker});
+  const first=actor.send(40n);
+  const second=actor.send(2n);
+  const settled=await Promise.allSettled([first,second]);
+  assert.equal(settled.length,2);
+  for (const value of settled) {
+    assert.equal(value.status,'rejected');
+    assert.match(value.reason.message,/E_ACTOR_PROTOCOL: out-of-order/);
+  }
+  assert.equal(worker.stopped,true);
+  assert.equal(actor.closed,true);
+});
+
+test('host kills actor on duplicated reply for an already settled request', async () => {
+  let worker;
+  class DuplicateReplyWorker {
+    constructor() { this.stopped=false; worker=this; }
+    postMessage(packet) {
+      if (packet.kind==='init') queueMicrotask(() => this.onmessage?.({data:{kind:'ready'}}));
+      if (packet.kind==='message') queueMicrotask(() => {
+        this.onmessage?.({data:{kind:'result',id:packet.id,value:packet.value}});
+        this.onmessage?.({data:{kind:'result',id:packet.id,value:packet.value}});
+      });
+    }
+    terminate() { this.stopped=true; }
+  }
+  const actor=await spawnWasmActor(COUNTER_WASM,{WorkerImpl:DuplicateReplyWorker});
+  assert.equal(await actor.send(42n),42n);
+  assert.equal(actor.closed,true);
+  assert.equal(worker.stopped,true);
+  await assert.rejects(actor.send(1n),/E_ACTOR_CLOSED/);
+});
