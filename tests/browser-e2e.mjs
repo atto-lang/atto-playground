@@ -336,6 +336,30 @@ try {
   })()`);
   assert.deepEqual(sequenceProbe,{skipped:true,replayed:true});
   ok('real browser worker rejects skipped and replayed actor sequence IDs before guest execution');
+  // The browser worker must never reopen a failed actor or emit a late
+  // 'ready' after a duplicate init has already terminally faulted it.
+  const duplicateInitProbe=await js(`(async()=>{
+    const worker=new Worker('/play/src/actor-worker.js',{type:'module'});
+    const wasm=Uint8Array.from(${JSON.stringify(Array.from(COUNTER_WASM))});
+    const packets=[];
+    try {
+      const fault=new Promise((resolve,reject)=>{
+        const deadline=setTimeout(()=>reject(new Error('double-init was not rejected')),3000);
+        worker.onmessage=e=>{packets.push(e.data?.kind);if(e.data?.kind==='fault'){clearTimeout(deadline);resolve();}};
+        worker.onerror=()=>{clearTimeout(deadline);reject(new Error('double-init worker error'))};
+      });
+      worker.postMessage({kind:'init',wasm});
+      worker.postMessage({kind:'init',wasm});
+      await fault;
+      await new Promise(resolve=>setTimeout(resolve,150));
+      const faultIndex=packets.indexOf('fault');
+      return {faults:packets.filter(x=>x==='fault').length,
+        lateReady:packets.slice(faultIndex+1).includes('ready'),
+        multipleReady:packets.filter(x=>x==='ready').length>1};
+    } finally {worker.terminate();}
+  })()`);
+  assert.deepEqual(duplicateInitProbe,{faults:1,lateReady:false,multipleReady:false});
+  ok('real browser worker rejects duplicate initialization without late ready or resurrection');
   const timeoutProbe=await js(`(async()=>{
     const {spawnWasmActor}=await import('/play/src/actor-runtime.js');
     const actor=await spawnWasmActor(Uint8Array.from(${JSON.stringify(Array.from(LOOP_WASM))}),{timeoutMs:100});
