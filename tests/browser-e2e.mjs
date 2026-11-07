@@ -141,7 +141,7 @@ try {
   await js("(()=>{const f=new File(["+JSON.stringify(importBody)+"],'programs.json',{type:'application/json'});const d=new DataTransfer();d.items.add(f);const e=document.querySelector('#import-file');e.files=d.files;e.dispatchEvent(new Event('change',{bubbles:true}));})()");
   const imported = await poll(async()=>js("JSON.parse(localStorage.getItem('atto.playground.saved-programs.v1')).some(p=>p.name==='Imported 7'&&p.source.includes('return 7'))"),'imported JSON program');
   assert.equal(imported,true);
-  assert.equal(await js("document.querySelector('#example option[value='saved:Imported 7']')!==null"),true);
+  assert.equal(await js('Array.from(document.querySelectorAll("#example option")).some(o=>o.value==="saved:Imported 7")'),true);
   ok('Import JSON validates and adds a named program to localStorage');
   await example('primes');
   await js("(()=>{const e=document.querySelector('#example');e.value='saved:Demo 42';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
