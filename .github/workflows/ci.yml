@@ -36,6 +36,9 @@ jobs:
         run: |
           export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
           node scripts/package-pages.mjs _site
+          # Candidate metadata is reviewer-only and must never enter public Pages.
+          test ! -e _site/release-candidates
+          test ! -e _site/release-candidates/rust-wasm-new-class-2026-11-07.json
           ATTO_STATIC_ROOT="$PWD/_site" npm run test:e2e
           test -s _site/release-manifest.json
           sha256sum public/atto_compiler.wasm
