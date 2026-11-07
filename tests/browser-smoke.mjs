@@ -93,7 +93,11 @@ try {
   console.log('PASS: Chromium rejected immutable reassignment with no Wasm artifact');
 } finally {
   try{ws?.close();}catch{}
-  chrome.kill('SIGKILL');
+  if (chrome.exitCode === null) {
+    const closed = new Promise(resolve => chrome.once('close', resolve));
+    chrome.kill('SIGKILL');
+    await timeout(closed, 2500, 'Chrome shutdown').catch(() => {});
+  }
   server.close();
-  await rm(userDir,{recursive:true,force:true});
+  await rm(userDir,{recursive:true,force:true,maxRetries:12,retryDelay:150});
 }
