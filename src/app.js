@@ -1,4 +1,5 @@
 import { createWorkerTask } from './worker-task.js';
+import { installActorWorkbench } from './actor-workbench.js';
 import { installEditor } from './editor.js';
 import { formatDiagnostic, formatWasm } from './ui.js';
 import { installProgramPicker } from './program-picker.js';
@@ -81,6 +82,16 @@ const COMPILE_DEADLINE_MS = 10000;
 const RUN_DEADLINE_MS = 3000;
 let runGeneration = 0;
 let lastWasm = null;
+const actorWorkbench = installActorWorkbench({
+  editor,
+  startButton: document.querySelector('#actor-start'),
+  sendButton: document.querySelector('#actor-send'),
+  stopButton: document.querySelector('#actor-stop'),
+  exampleButton: document.querySelector('#actor-example'),
+  messageInput: document.querySelector('#actor-message'),
+  status: document.querySelector('#actor-status'),
+  output: document.querySelector('#actor-output'),
+});
 
 function display(message, kind = 'neutral') {
   output.textContent = message;
@@ -89,6 +100,7 @@ function display(message, kind = 'neutral') {
 }
 function setRunning(value) {
   working = value;
+  actorWorkbench.setBusy(value);
   runButton.disabled = value;
   stopButton.disabled = !value;
   editor.readOnly = value;
@@ -151,6 +163,7 @@ async function formatCode(checkOnly) {
   if (working || formatting) return;
   const before = editor.value, start = editor.selectionStart, end = editor.selectionEnd;
   formatting = true;
+  actorWorkbench.setBusy(true);
   formatButton.disabled = checkFormatButton.disabled = runButton.disabled = true;
   editor.readOnly = true;
   selector.disabled = true;
@@ -200,6 +213,7 @@ async function formatCode(checkOnly) {
     display('E_FORMAT: ' + String(error?.message || error), 'error');
   } finally {
     formatting = false;
+    actorWorkbench.setBusy(working);
     editor.readOnly = working;
     selector.disabled = working;
     runButton.disabled = working;
