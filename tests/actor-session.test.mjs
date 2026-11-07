@@ -103,3 +103,35 @@ test('actor session rejects a second start, resumes after explicit stop', async 
   await session.start('actor');
   session.stop();
 });
+
+test('invalid spawn handles never leak an initialized worker', async () => {
+  let closed = 0;
+  for (const handle of [
+    {close() { closed++; }},
+    {close() { closed++; },send: 42},
+    null,
+  ]) {
+    const session = createActorSession({
+      compile: async () => ({ok:true,wasm:bytes()}),
+      spawn: async () => handle,
+    });
+    await assert.rejects(session.start('actor'), /E_ACTOR_PROTOCOL/);
+    assert.equal(session.active,false);
+    session.stop();
+  }
+  assert.equal(closed,2);
+});
+
+test('stop during initialization tolerates absent handles and never revives a worker', async () => {
+  let release;
+  const session=createActorSession({
+    compile:async()=>({ok:true,wasm:bytes()}),
+    spawn:()=>new Promise(resolve=>{release=resolve;}),
+  });
+  const pending=session.start('actor');
+  await tick();
+  session.stop();
+  release(null);
+  await assert.rejects(pending,/E_ACTOR_CANCELLED/);
+  assert.equal(session.active,false);
+});
