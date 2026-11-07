@@ -11,11 +11,8 @@ export function installProgramPicker({ selector, editor, nameInput, saveButton, 
   const storage = () => window.localStorage; // getter may throw: caught at use sites
   const isDirty = () => customMode && (editor.value !== cleanSource ||
     (selectedName !== null && nameInput.value.trim() !== selectedName));
-  window.addEventListener('beforeunload', event => {
-    if (!isDirty()) return;
-    event.preventDefault();
-    event.returnValue = ''; // Browser controls the confirmation text.
-  });
+  // Warn on program switches, not beforeunload: browser modal unload dialogs
+  // blocked real Chromium automation and cannot be reliably customized.
   const edit = source => {
     editor.value = source;
     editor.dispatchEvent(new Event('input', { bubbles: true }));
