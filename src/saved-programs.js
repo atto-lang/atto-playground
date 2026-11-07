@@ -70,7 +70,9 @@ export function deleteProgram(storage, name) {
 
 /** Portable backup format. No remote storage, evaluation or source upload. */
 export function exportPrograms(storage) {
-  return JSON.stringify({format: BACKUP_FORMAT, programs: strictStoragePrograms(storage)}, null, 2) + '\n';
+  const json = JSON.stringify({format: BACKUP_FORMAT, programs: strictStoragePrograms(storage)}, null, 2) + '\n';
+  if (encoder.encode(json).length > MAX_BACKUP_BYTES) throw new Error('Backup exceeds 512 KiB; export fewer or smaller programs');
+  return json;
 }
 
 /** Validate an entire import before making exactly one localStorage write. */
