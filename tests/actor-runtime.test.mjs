@@ -28,6 +28,27 @@ test('source-free contract fails closed for wrong exports, malformed modules and
   assert.throws(() => validateActorGuest({}), /Invalid or oversized/);
 });
 
+test('actor admission verifies the real WebAssembly function signature, not just an export label', () => {
+  const noParams = Uint8Array.from([
+    0,97,115,109,1,0,0,0,
+    1,5,1,0x60,0,1,0x7e,
+    3,2,1,0,
+    7,11,1,7,114,101,99,101,105,118,101,0,0,
+    10,6,1,4,0,0x42,42,0x0b,
+  ]);
+  assert.equal(WebAssembly.validate(noParams), true);
+  assert.throws(() => validateActorGuest(noParams), /receive\(i64\)->i64/);
+  const wrongResult = Uint8Array.from([
+    0,97,115,109,1,0,0,0,
+    1,6,1,0x60,1,0x7e,1,0x7f,
+    3,2,1,0,
+    7,11,1,7,114,101,99,101,105,118,101,0,0,
+    10,6,1,4,0,0x41,42,0x0b,
+  ]);
+  assert.equal(WebAssembly.validate(wrongResult), true);
+  assert.throws(() => validateActorGuest(wrongResult), /receive\(i64\)->i64/);
+});
+
 test('actor payloads reject floats, JS numbers, and out-of-range i64', () => {
   assert.equal(isI64(I64_MIN), true);
   assert.equal(isI64(I64_MAX), true);
