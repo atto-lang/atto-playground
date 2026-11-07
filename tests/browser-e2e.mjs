@@ -66,9 +66,14 @@ try {
   assert.ok(page,'Chromium page target missing');
   socket=new WebSocket(page.webSocketDebuggerUrl);
   await deadline(new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true});}),5000);
-  let id=0;const pending=new Map();
+  let id=0;const pending=new Map();let unexpectedDialogs=0;
   socket.addEventListener('message',event=>{
     const message=JSON.parse(event.data);
+    if (message.method === 'Page.javascriptDialogOpening') {
+      unexpectedDialogs++;
+      void cdp('Page.handleJavaScriptDialog',{accept:true}).catch(()=>{});
+      return;
+    }
     if(!pending.has(message.id))return;
     const pair=pending.get(message.id);pending.delete(message.id);
     if(message.error)pair.reject(new Error(message.error.message));else pair.resolve(message.result);
@@ -127,6 +132,7 @@ try {
   await run('success','main() → 42');
   ok('saved program reloads from the custom dropdown and compiles in real Wasm');
   await cdp('Page.navigate',{url:'about:blank'});
+  assert.equal(unexpectedDialogs,0,'Clean saved program unexpectedly opened beforeunload dialog');
   await navigate(base);
   await js("(()=>{const e=document.querySelector('#example');e.value='saved:Demo 42';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
   assert.equal((await view()).source,customSource);
