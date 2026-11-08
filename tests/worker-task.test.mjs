@@ -91,3 +91,49 @@ test('invalid deadline rejected before worker allocation', () => {
   }
   assert.equal(workers.length, 0);
 });
+
+test('throwing Worker.terminate cannot strand successful replies or cancel and deadline rejection', async () => {
+  FakeWorker.instances = [];
+  class BrokenTerminateWorker extends FakeWorker {
+    terminate() { super.terminate(); throw new Error('injected termination failure'); }
+  }
+  const task = createWorkerTask({ WorkerImpl: BrokenTerminateWorker });
+  const first = task.request('./worker.js', {kind:'first'}, 1000);
+  FakeWorker.instances[0].reply({ok:true,value:42});
+  assert.deepEqual(await first, {ok:true,value:42});
+  assert.equal(task.cancel(), false);
+  const second = task.request('./worker.js', {kind:'second'}, 1000);
+  assert.equal(task.cancel(), true);
+  await assert.rejects(second, /Operation cancelled/);
+  const third = task.request('./worker.js', {kind:'third'}, 5, 'Actor compilation');
+  await assert.rejects(third, /Actor compilation deadline exceeded/);
+  assert.deepEqual(FakeWorker.instances.map(w=>w.terminated), [1,1,1]);
+  assert.equal(task.cancel(), false);
+});
+
+test('timer registration failure rejects and releases worker without sending payload', async () => {
+  FakeWorker.instances = [];
+  const task=createWorkerTask({
+    WorkerImpl:FakeWorker,
+    setTimer(){throw Error('injected timer allocation failure');},
+  });
+  await assert.rejects(task.request('./worker.js',{secret:'should-not-send'},10),/timer allocation failure/);
+  assert.equal(FakeWorker.instances.length,1);
+  assert.equal(FakeWorker.instances[0].terminated,1);
+  assert.equal(FakeWorker.instances[0].payload,undefined);
+  assert.equal(task.cancel(),false);
+});
+
+test('throwing terminate cannot hide structured-clone or worker error', async () => {
+  FakeWorker.instances = [];
+  class BrokenTerminateWorker extends FakeWorker {
+    terminate() { super.terminate(); throw Error('termination failure'); }
+  }
+  const task=createWorkerTask({WorkerImpl:BrokenTerminateWorker});
+  await assert.rejects(task.request('./worker.js',{throwOnSend:true},1000),/DataCloneError/);
+  const pending=task.request('./worker.js',{},1000);
+  FakeWorker.instances[1].failDecode();
+  await assert.rejects(pending,/Worker response could not be decoded/);
+  assert.deepEqual(FakeWorker.instances.map(w=>w.terminated),[1,1]);
+  assert.equal(task.cancel(),false);
+});
