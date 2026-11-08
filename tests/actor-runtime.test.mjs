@@ -123,3 +123,109 @@ test('host kills actor on duplicated reply for an already settled request', asyn
   assert.equal(worker.stopped,true);
   await assert.rejects(actor.send(1n),/E_ACTOR_CLOSED/);
 });
+
+test('bounded admission refuses excess sends without allocating sequence IDs and close rejects all pending work', async () => {
+  let worker;
+  class StalledWorker {
+    constructor() { this.messages = []; this.terminations = 0; worker = this; }
+    postMessage(packet) {
+      if (packet.kind === 'init') queueMicrotask(() => this.onmessage?.({data:{kind:'ready'}}));
+      if (packet.kind === 'message') this.messages.push(packet);
+    }
+    terminate() { this.terminations++; }
+  }
+  const actor = await spawnWasmActor(COUNTER_WASM, {WorkerImpl: StalledWorker, maxMailbox: 2, timeoutMs: 500});
+  const first = actor.send(40n);
+  const second = actor.send(2n);
+  await assert.rejects(actor.send(1n), /E_MAILBOX_FULL/);
+  assert.deepEqual(worker.messages.map(m => m.id), [1, 2],
+    'rejected admission must not enter mailbox or consume an ID');
+  actor.close();
+  const settled = await Promise.allSettled([first, second]);
+  for (const result of settled) {
+    assert.equal(result.status, 'rejected');
+    assert.match(result.reason.message, /E_ACTOR_CLOSED/);
+  }
+  await assert.rejects(actor.send(3n), /E_ACTOR_CLOSED/);
+  actor.close();
+  assert.equal(worker.terminations, 1, 'repeated close must never double-terminate');
+});
+
+test('actor init copies caller-owned compiler guest bytes, never transfers or aliases them', async () => {
+  const guest = new Uint8Array(COUNTER_WASM);
+  const snapshot = new Uint8Array(guest);
+  let initBytes;
+  class CaptureWorker {
+    postMessage(packet) {
+      if (packet.kind === 'init') {
+        initBytes = packet.wasm;
+        queueMicrotask(() => this.onmessage?.({data:{kind:'ready'}}));
+      }
+    }
+    terminate() {}
+  }
+  const actor = await spawnWasmActor(guest, {WorkerImpl: CaptureWorker});
+  assert.ok(initBytes instanceof Uint8Array);
+  assert.notStrictEqual(initBytes, guest);
+  assert.notStrictEqual(initBytes.buffer, guest.buffer);
+  guest.fill(0);
+  assert.deepEqual(initBytes, snapshot, 'guest mutation after spawn cannot corrupt worker-owned bytes');
+  actor.close();
+});
+
+test('premature worker result rejects initialization and terminally destroys worker', async () => {
+  let terminated = 0;
+  class PrematureWorker {
+    postMessage(packet) {
+      if (packet.kind === 'init') queueMicrotask(() =>
+        this.onmessage?.({data:{kind:'result',id:1,value:1n}}));
+    }
+    terminate() { terminated++; }
+  }
+  await assert.rejects(spawnWasmActor(COUNTER_WASM, {WorkerImpl: PrematureWorker}),
+    /E_ACTOR_PROTOCOL: invalid worker response/);
+  assert.equal(terminated, 1);
+});
+
+test('duplicate ready is a terminal protocol violation, not actor reinitialization', async () => {
+  let terminated = 0;
+  class DoubleReadyWorker {
+    postMessage(packet) {
+      if (packet.kind === 'init') queueMicrotask(() => {
+        this.onmessage?.({data:{kind:'ready'}});
+        this.onmessage?.({data:{kind:'ready'}});
+      });
+    }
+    terminate() { terminated++; }
+  }
+  const actor = await spawnWasmActor(COUNTER_WASM, {WorkerImpl: DoubleReadyWorker});
+  assert.equal(actor.closed, true);
+  assert.equal(terminated, 1);
+  await assert.rejects(actor.send(1n), /E_ACTOR_CLOSED/);
+});
+
+test('guest panic notice rejects every outstanding send and prevents further mailbox admission', async () => {
+  let worker;
+  class PanicWorker {
+    constructor() { this.messages = []; this.terminated = false; worker = this; }
+    postMessage(packet) {
+      if (packet.kind === 'init') queueMicrotask(() => this.onmessage?.({data:{kind:'ready'}}));
+      if (packet.kind === 'message') {
+        this.messages.push(packet);
+        if (this.messages.length === 2) queueMicrotask(() =>
+          this.onmessage?.({data:{kind:'fault',message:'E_ACTOR_PANIC: checked integer overflow'}}));
+      }
+    }
+    terminate() { this.terminated = true; }
+  }
+  const actor = await spawnWasmActor(COUNTER_WASM, {WorkerImpl: PanicWorker, timeoutMs: 500});
+  const settled = await Promise.allSettled([actor.send(1n), actor.send(2n)]);
+  assert.deepEqual(worker.messages.map(m => m.id), [1, 2]);
+  for (const result of settled) {
+    assert.equal(result.status, 'rejected');
+    assert.match(result.reason.message, /E_ACTOR_PANIC: checked integer overflow/);
+  }
+  assert.equal(actor.closed, true);
+  assert.equal(worker.terminated, true);
+  await assert.rejects(actor.send(3n), /E_ACTOR_CLOSED/);
+});
