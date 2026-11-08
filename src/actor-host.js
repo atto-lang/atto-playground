@@ -70,6 +70,23 @@ export function guestMemoryBudgetBytes(wasm) {
 }
 
 export const MAX_ACTORS = 16;
+export const ACTOR_REF_SLOT_BITS = 4;
+export const MAX_ACTOR_GENERATION = 0x07ffffff;
+const ACTOR_REF_SLOT_MASK = (1 << ACTOR_REF_SLOT_BITS) - 1;
+export function encodeActorRef(slot, generation) {
+  if (!Number.isInteger(slot) || slot < 0 || slot >= MAX_ACTORS ||
+      !Number.isSafeInteger(generation) || generation < 1 || generation > MAX_ACTOR_GENERATION) {
+    throw new RangeError('E_ACTOR_REF: invalid actor slot or generation');
+  }
+  return generation * (1 << ACTOR_REF_SLOT_BITS) + slot;
+}
+export function decodeActorRef(handle) {
+  if (!Number.isInteger(handle) || handle <= 0 || handle > 0x7fffffff) return null;
+  const slot = handle & ACTOR_REF_SLOT_MASK;
+  const generation = Math.floor(handle / (1 << ACTOR_REF_SLOT_BITS));
+  if (generation < 1 || generation > MAX_ACTOR_GENERATION) return null;
+  return { slot, generation };
+}
 export const MAX_MAILBOX = 10_000;
 const I64_MIN = -(2n ** 63n), I64_MAX = 2n ** 63n - 1n;
 
@@ -87,7 +104,38 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   const drainWaiters = [];
   const workerIdentities = new Set();
 
-  const label = a => `${a.name}#${a.ref}`;
+  const label = a => `${a.name}#${a.id}@${a.generation}`;
+  function resolve(handle) {
+    const decoded = decodeActorRef(handle);
+    if (!decoded) throw new Error('E_ACTOR_REF_STALE: invalid or expired actor reference');
+    const actor = actors[decoded.slot];
+    if (!actor || actor.generation !== decoded.generation || actor.state === 'stopped' || actor.state === 'failed') throw new Error('E_ACTOR_REF_STALE: invalid or expired actor reference');
+    return actor;
+  }
+  function detach(a) {
+    if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
+    const worker=a.worker; a.worker=null;
+    if(worker){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
+  }
+  function startWorker(a) {
+    let worker=null;
+    try {
+      worker=new WorkerImpl(workerUrl,{type:'module'});
+      if(!worker||workerIdentities.has(worker)) throw new Error('E_ACTOR_ISOLATION: duplicate worker identity');
+      workerIdentities.add(worker); a.worker=worker; a.ready=false; a.state='starting';
+      const generation=a.generation;
+      worker.onmessage=event=>{if(closed||a.generation!==generation||a.worker!==worker)return;onMessage(a,event.data,generation,worker);};
+      worker.onerror=event=>{event?.preventDefault?.();if(a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR: worker failed to load or execute');};
+      worker.onmessageerror=()=>{if(a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR_PROTOCOL: undecodable actor message');};
+      a.initTimer=setTimer(()=>{if(!a.ready&&!closed&&a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR_INIT_TIMEOUT: actor worker did not become ready');},initTimeoutMs);
+      worker.postMessage({kind:'init',wasm:new Uint8Array(wasm),type:a.type});
+    } catch(error) {
+      if(worker&&workerIdentities.has(worker)){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
+      if(a.worker===worker)a.worker=null;
+      if(a.initTimer!==null){clearTimer(a.initTimer);a.initTimer=null;}
+      throw error;
+    }
+  }
   function fail(a, message) {
     if (fault) return;
     fault = `${message} in actor ${label(a)}`;
@@ -107,7 +155,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       for (const resolve of waiters) resolve(terminalResult);
     }
   }
-  function onMessage(a, data) {
+  function onMessage(a, data, generation = a.generation, worker = a.worker) {
+    if (a.generation !== generation || a.worker !== worker) return;
     if (closed || fault) return;
     if (typeof data?.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
     if (data?.truncated) out.truncated = true;
@@ -119,6 +168,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       check();
     } else if (data?.kind === 'ready' && !a.ready) {
       a.ready = true;
+      a.state = 'running';
       if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
       check();
     } else {
@@ -127,53 +177,31 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   }
 
   function spawn(type) {
-    if (closed) throw new Error('E_ACTOR: actor host closed');
-    if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
-    if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
-    if (actorMemoryBytes + actorMemoryBytesPerInstance > MAX_TOTAL_ACTOR_MEMORY_BYTES) throw new Error('E_ACTOR_TOTAL_MEMORY: aggregate actor memory budget exceeded');
-    const ref = actors.length;
-    const a = { ref, type, name: names[type], sent: 0, done: 0, ready: false, worker: null, initTimer: null };
-    let ownsWorker = false;
-    actorMemoryBytes += actorMemoryBytesPerInstance;
-    try {
-      a.worker = new WorkerImpl(workerUrl, { type: 'module' });
-    if (!a.worker) throw new Error('Worker constructor returned no worker');
-      if (!a.worker || workerIdentities.has(a.worker)) {
-      // A mock or host adapter must never assign two actor identities to one Worker.
-        fail(a, 'E_ACTOR_ISOLATION: duplicate worker identity');
-        throw new Error(fault);
-      }
-      workerIdentities.add(a.worker);
-      ownsWorker = true;
-      a.worker.onmessage = event => onMessage(a, event.data);
-      a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
-      a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
-      a.initTimer = setTimer(() => {
-        if (!a.ready && !closed) fail(a, 'E_ACTOR_INIT_TIMEOUT: actor worker did not become ready');
-      }, initTimeoutMs);
-      // Each actor receives a distinct copy and a distinct Worker identity.
-      a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type });
-      actors.push(a);
-      return ref;
-    } catch (error) {
-      if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
-      try {
-        if (ownsWorker && a.worker) {
-          a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
-          a.worker.terminate();
-        }
-      } catch { /* The host must still fail instead of admitting this actor. */ }
-      if (ownsWorker && a.worker) workerIdentities.delete(a.worker);
-      actorMemoryBytes -= actorMemoryBytesPerInstance;
-      fail(a, 'E_ACTOR_INIT: worker initialization failed');
-      throw error;
-    }
+    if(closed)throw new Error('E_ACTOR: actor host closed');
+    if(!Number.isInteger(type)||type<0||type>=names.length)throw new Error('E_ACTOR: unknown actor type');
+    if(actors.length>=MAX_ACTORS)throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
+    if(actorMemoryBytes+actorMemoryBytesPerInstance>MAX_TOTAL_ACTOR_MEMORY_BYTES)throw new Error('E_ACTOR_TOTAL_MEMORY: aggregate actor memory budget exceeded');
+    const id=actors.length,generation=1;
+    const a={id,generation,type,name:names[type],sent:0,done:0,ready:false,state:'starting',worker:null,initTimer:null};
+    actorMemoryBytes+=actorMemoryBytesPerInstance;
+    try{startWorker(a);actors.push(a);return encodeActorRef(id,generation);}
+    catch(error){actorMemoryBytes-=actorMemoryBytesPerInstance;fail(a,'E_ACTOR_INIT: worker initialization failed');throw error;}
+  }
+
+  function restart(handle) {
+    if(closed)throw new Error('E_ACTOR: actor host closed');
+    const a=resolve(handle);
+    if(a.state!=='running'||!a.ready||a.done!==a.sent)throw new Error('E_ACTOR_RESTART_BUSY: actor must be ready with an empty mailbox');
+    if(a.generation>=MAX_ACTOR_GENERATION){a.state='failed';fail(a,'E_ACTOR_GENERATION_EXHAUSTED');detach(a);throw new Error('E_ACTOR_GENERATION_EXHAUSTED: actor generation cannot wrap');}
+    a.state='stopping';detach(a);a.generation++;a.sent=0;a.done=0;
+    try{startWorker(a);return encodeActorRef(a.id,a.generation);}
+    catch(error){a.state='failed';fail(a,'E_ACTOR_RESTART: worker restart failed');throw error;}
   }
 
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
-    const a = Number.isInteger(ref) ? actors[ref] : undefined;
-    if (!a) throw new Error('E_ACTOR: invalid actor reference');
+    const a = resolve(ref);
+    if (a.state !== 'running' || !a.ready) throw new Error('E_ACTOR_NOT_READY: actor is not ready');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     if (pendingMessages >= MAX_TOTAL_PENDING_MESSAGES) throw new Error('E_ACTOR_TOTAL_MAILBOX: aggregate pending-message budget exceeded');
@@ -202,18 +230,15 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!terminal && !fault) fault = 'E_ACTOR_CANCELLED: actor host closed';
     check(); // settle every pending drain; never leave a cancelled run hanging
     for (const a of actors) {
-      if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
-      try {
-        a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
-        a.worker.terminate();
-      } catch { /* Continue cleanup of all remaining actor workers. */ }
+      a.state = 'stopped';
+      detach(a);
     }
     workerIdentities.clear();
     actorMemoryBytes = 0;
     pendingMessages = 0;
   }
 
-  return { spawn, send, drain, close,
+  return { spawn, send, restart, drain, close,
     get count() { return actors.length; },
     get stats() { return Object.freeze({ actors: actors.length, actorMemoryBytes, pendingMessages, maxActorMemoryBytes: MAX_TOTAL_ACTOR_MEMORY_BYTES, maxPendingMessages: MAX_TOTAL_PENDING_MESSAGES }); }
   };
