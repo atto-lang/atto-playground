@@ -17,7 +17,9 @@ export function createWorkerTask({ WorkerImpl = globalThis.Worker, setTimer = se
         worker.onmessage = null;
         worker.onerror = null;
         worker.onmessageerror = null;
-        worker.terminate();
+        // Termination is best effort. A failing injected or browser Worker
+        // must never strand the request or leave active pointing to it.
+        try { worker.terminate(); } catch { /* settle original outcome */ }
         if (active?.worker === worker) active = null;
         if (error) reject(error); else resolve(result);
       }
@@ -25,7 +27,8 @@ export function createWorkerTask({ WorkerImpl = globalThis.Worker, setTimer = se
       worker.onmessage = event => finish(null, event.data);
       worker.onerror = () => finish(new Error('Worker failed to load or execute'));
       worker.onmessageerror = () => finish(new Error('Worker response could not be decoded'));
-      timer = setTimer(() => finish(new Error(`${label} deadline exceeded`)), timeoutMs);
+      try { timer = setTimer(() => finish(new Error(`${label} deadline exceeded`)), timeoutMs); }
+      catch (error) { finish(error); return; }
       try { worker.postMessage(payload); }
       catch (error) { finish(error); }
     });
