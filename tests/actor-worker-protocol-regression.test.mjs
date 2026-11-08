@@ -62,9 +62,9 @@ test('real source-compiled actor admits consecutive 0-based mail exactly once', 
   try {
     assert.deepEqual(await ready(w), {kind:'ready'});
     w.send({kind:'mail',value:7n,sequence:0});
-    assert.deepEqual(await w.wait(2), {kind:'done',sequence:0,stdout:'7\\n',truncated:false});
+    assert.deepEqual(await w.wait(2), {kind:'done',sequence:0,stdout:'7\n',truncated:false});
     w.send({kind:'mail',value:3n,sequence:1});
-    assert.deepEqual(await w.wait(3), {kind:'done',sequence:1,stdout:'10\\n',truncated:false});
+    assert.deepEqual(await w.wait(3), {kind:'done',sequence:1,stdout:'10\n',truncated:false});
   } finally { w.close(); }
 });
 
