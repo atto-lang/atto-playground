@@ -283,6 +283,39 @@ try {
   // Editing stops an actor and invalidates any stale worker response.
   await source('pub fnc main(): int { return 42; }');
 
+  // Invalid compiler requests must be denied before fetching any Wasm asset.
+  // A fresh worker is used per case so the fetch count is meaningful.
+  const compilerFetchCount=requests.filter(r=>r.url?.includes('/play/public/atto_compiler.wasm')).length;
+  const prefetchReject=await js(`(async()=>{
+    const cases=[
+      {kind:'actor',source:'x'.repeat(65537)},
+      {kind:'actor',source:'🚀'.repeat(17000)},
+      {kind:'bogus',source:'pub fnc main(): int { return 42; }'},
+      {kind:'actor',source:42},
+    ];
+    const replies=[];
+    for(const packet of cases){
+      const worker=new Worker('/play/src/compiler-worker.js',{type:'module'});
+      try {
+        const result=await new Promise((resolve,reject)=>{
+          const timeout=setTimeout(()=>reject(Error('prefetch rejection deadline')),3000);
+          worker.onmessage=e=>{clearTimeout(timeout);resolve(e.data)};
+          worker.onerror=()=>{clearTimeout(timeout);reject(Error('compiler worker startup failed'))};
+          worker.postMessage(packet);
+        });
+        replies.push({ok:result.ok,message:result.diagnostics?.[0]?.message});
+      } finally {worker.terminate();}
+    }
+    return replies;
+  })()`);
+  assert.deepEqual(prefetchReject.map(r=>r.ok),[false,false,false,false]);
+  assert.match(prefetchReject[0].message,/^E_SOURCE_LIMIT:/);
+  assert.match(prefetchReject[1].message,/^E_SOURCE_LIMIT:/);
+  assert.match(prefetchReject[2].message,/Unsupported compile target/);
+  assert.match(prefetchReject[3].message,/Source must be text/);
+  assert.equal(requests.filter(r=>r.url?.includes('/play/public/atto_compiler.wasm')).length,compilerFetchCount,
+    'malformed and oversized inputs must not fetch compiler Wasm');
+  ok('direct compiler workers reject oversized UTF-8 and malformed input without fetching compiler Wasm');
   // Execute real Web Workers with separate Wasm instances and FIFO i64 messages.
   // The fixture is hand-assembled Wasm, not yet AttoLang actor source lowering.
   const actorProbe=await js(`(async()=>{
