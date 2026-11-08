@@ -135,3 +135,54 @@ test('stop during initialization tolerates absent handles and never revives a wo
   await assert.rejects(pending,/E_ACTOR_CANCELLED/);
   assert.equal(session.active,false);
 });
+
+test('throwing close cannot leave an actor session active or prevent restart', async () => {
+  let created = 0;
+  const session = createActorSession({
+    compile: async () => ({ok:true, wasm:bytes()}),
+    spawn: async () => {
+      created++;
+      return {send:async value => value, close(){throw Error('injected close error');}, closed:false};
+    },
+  });
+  await session.start('source');
+  assert.equal(session.active, true);
+  assert.equal(await session.send(41n), 41n);
+  assert.doesNotThrow(() => session.stop());
+  assert.equal(session.active, false);
+  assert.equal(session.starting, false);
+  await assert.rejects(session.send(1n), /E_ACTOR_CLOSED/);
+  await session.start('source');
+  assert.equal(created, 2, 'restart must adopt only fresh actor');
+  assert.doesNotThrow(() => session.stop());
+});
+
+test('late throwing close after Stop cannot turn cancellation into a handle error', async () => {
+  let release, closes = 0;
+  const session = createActorSession({
+    compile: async () => ({ok:true, wasm:bytes()}),
+    spawn: () => new Promise(resolve => {release=resolve;}),
+  });
+  const pending = session.start('source');
+  await tick();
+  session.stop();
+  release({send:async value=>value,close(){closes++;throw Error('late close failed');}});
+  await assert.rejects(pending, /E_ACTOR_CANCELLED/);
+  assert.equal(closes, 1);
+  assert.equal(session.active, false);
+  assert.equal(session.starting, false);
+  await assert.rejects(session.send(1n), /E_ACTOR_CLOSED/);
+});
+
+test('malformed returned actor handle is rejected even when cleanup throws', async () => {
+  let closes = 0;
+  const session = createActorSession({
+    compile: async () => ({ok:true, wasm:bytes()}),
+    spawn: async () => ({close(){closes++;throw Error('invalid cleanup failed');}}),
+  });
+  await assert.rejects(session.start('source'), /E_ACTOR_PROTOCOL: invalid actor handle/);
+  assert.equal(closes,1);
+  assert.equal(session.active,false);
+  assert.equal(session.starting,false);
+  assert.doesNotThrow(() => session.stop());
+});
