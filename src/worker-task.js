@@ -13,7 +13,9 @@ export function createWorkerTask({ WorkerImpl = globalThis.Worker, setTimer = se
       function finish(error, result) {
         if (settled) return;
         settled = true;
-        clearTimer(timer);
+        // Timer cleanup is best effort: a faulty injected timer must not
+        // mask the original outcome or leave a request unresolved.
+        try { clearTimer(timer); } catch { /* preserve original settlement */ }
         worker.onmessage = null;
         worker.onerror = null;
         worker.onmessageerror = null;
@@ -29,6 +31,12 @@ export function createWorkerTask({ WorkerImpl = globalThis.Worker, setTimer = se
       worker.onmessageerror = () => finish(new Error('Worker response could not be decoded'));
       try { timer = setTimer(() => finish(new Error(`${label} deadline exceeded`)), timeoutMs); }
       catch (error) { finish(error); return; }
+      // An injected timer may call its callback synchronously. Once the
+      // request has timed out, NEVER post the payload to a dead worker.
+      if (settled) {
+        try { clearTimer(timer); } catch { /* already terminal */ }
+        return;
+      }
       try { worker.postMessage(payload); }
       catch (error) { finish(error); }
     });
