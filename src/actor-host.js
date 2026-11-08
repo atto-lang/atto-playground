@@ -78,12 +78,12 @@ export function encodeActorRef(slot, generation) {
       !Number.isSafeInteger(generation) || generation < 1 || generation > MAX_ACTOR_GENERATION) {
     throw new RangeError('E_ACTOR_REF: invalid actor slot or generation');
   }
-  return generation * (1 << ACTOR_REF_SLOT_BITS) + slot;
+  return (generation - 1) * (1 << ACTOR_REF_SLOT_BITS) + slot;
 }
 export function decodeActorRef(handle) {
-  if (!Number.isInteger(handle) || handle <= 0 || handle > 0x7fffffff) return null;
+  if (!Number.isInteger(handle) || handle < 0 || handle > 0x7fffffff) return null;
   const slot = handle & ACTOR_REF_SLOT_MASK;
-  const generation = Math.floor(handle / (1 << ACTOR_REF_SLOT_BITS));
+  const generation = Math.floor(handle / (1 << ACTOR_REF_SLOT_BITS)) + 1;
   if (generation < 1 || generation > MAX_ACTOR_GENERATION) return null;
   return { slot, generation };
 }
@@ -201,7 +201,6 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
     const a = resolve(ref);
-    if (a.state !== 'running' || !a.ready) throw new Error('E_ACTOR_NOT_READY: actor is not ready');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     if (pendingMessages >= MAX_TOTAL_PENDING_MESSAGES) throw new Error('E_ACTOR_TOTAL_MAILBOX: aggregate pending-message budget exceeded');
