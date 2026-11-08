@@ -32,6 +32,7 @@ function hostFor(wasm, options={}) {
 test('fixed guest memory is charged at declared maximum, not current use',()=>{
   assert.equal(guestMemoryBudgetBytes(new Uint8Array([0,97,115,109,1,0,0,0])),0);
   assert.equal(guestMemoryBudgetBytes(memoryModule(1,16,16)),1_048_576);
+  assert.equal(guestMemoryBudgetBytes(memoryModule(1,1,1)),65_536);
   assert.throws(()=>guestMemoryBudgetBytes(memoryModule(0,16,null)),/fixed maximum/);
   assert.throws(()=>guestMemoryBudgetBytes(memoryModule(1,17,17)),/at most 16 pages/);
   assert.throws(()=>guestMemoryBudgetBytes(memoryModule(1,0,16)),/fixed and at most/);
@@ -97,5 +98,5 @@ end
 pub fnc main(): int { val a = spawn A(); return 0; }`;
   const compiled=compiler.compile(source);
   assert.equal(compiled.ok,true,JSON.stringify(compiled.diagnostics));
-  assert.equal(guestMemoryBudgetBytes(compiled.wasm),1_048_576);
+  assert.equal(guestMemoryBudgetBytes(compiled.wasm),65_536);
 });
