@@ -51,17 +51,19 @@ test('aggregate actor memory is reserved before Worker creation',()=>{
 
 test('aggregate pending mail counts all actors and releases capacity only on matching done',()=>{
   const host=hostFor(new Uint8Array([0,97,115,109,1,0,0,0]));
-  const a=host.spawn(0),b=host.spawn(0);
-  ManualWorker.instances[0].ready(); ManualWorker.instances[1].ready();
+  const a=host.spawn(0),b=host.spawn(0),c=host.spawn(0);
+  ManualWorker.instances[0].ready(); ManualWorker.instances[1].ready(); ManualWorker.instances[2].ready();
   for(let i=0;i<10_000;i++) host.send(a,BigInt(i));
   for(let i=0;i<10_000;i++) host.send(b,BigInt(i));
   assert.equal(host.stats.pendingMessages,MAX_TOTAL_PENDING_MESSAGES);
-  assert.throws(()=>host.send(a,10001n),/E_ACTOR_TOTAL_MAILBOX/);
+  assert.throws(()=>host.send(c,10001n),/E_ACTOR_TOTAL_MAILBOX/);
   ManualWorker.instances[0].done(0);
   assert.equal(host.stats.pendingMessages,MAX_TOTAL_PENDING_MESSAGES-1);
-  assert.doesNotThrow(()=>host.send(a,10001n));
+  assert.doesNotThrow(()=>host.send(c,10001n));
   assert.equal(host.stats.pendingMessages,MAX_TOTAL_PENDING_MESSAGES);
   host.close();
+  assert.equal(host.stats.actorMemoryBytes,0);
+  assert.equal(host.stats.pendingMessages,0);
 });
 
 test('actor initialization timeout fails drain and cleanup clears its timer',async()=>{
