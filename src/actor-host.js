@@ -109,7 +109,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     const decoded = decodeActorRef(handle);
     if (!decoded) throw new Error('E_ACTOR_REF_STALE: invalid actor reference (expired or stale)');
     const actor = actors[decoded.slot];
-    if (!actor || actor.generation !== decoded.generation || actor.state === 'stopped' || actor.state === 'failed') throw new Error('E_ACTOR_REF_STALE: invalid or expired actor reference');
+    if (!actor || actor.generation !== decoded.generation || actor.state === 'stopped' || actor.state === 'failed') throw new Error('E_ACTOR_REF_STALE: invalid actor reference (expired or stale)');
     return actor;
   }
   function detach(a) {
