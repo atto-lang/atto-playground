@@ -63,13 +63,13 @@ export function createActorSession({ compile = null, spawn = spawnWasmActor } = 
       spawned = await spawn(result.wasm);
       if (id !== generation) {
         // A worker may finish initializing after Stop. Never adopt it.
-        spawned?.close?.();
+        try { spawned?.close?.(); } catch { /* late worker must stay unadopted */ }
         throw new Error('E_ACTOR_CANCELLED');
       }
       if (!spawned || typeof spawned.send !== 'function' || typeof spawned.close !== 'function') {
         // Release partially initialized handles, including a worker wrapper
         // which exposes close() but lacks the mandatory send() contract.
-        spawned?.close?.();
+        try { spawned?.close?.(); } catch { /* invalid handle is never adopted */ }
         throw new Error('E_ACTOR_PROTOCOL: invalid actor handle');
       }
       actor = spawned;
@@ -82,9 +82,12 @@ export function createActorSession({ compile = null, spawn = spawnWasmActor } = 
   function stop() {
     ++generation;
     compilerTask.cancel();
-    actor?.close();
+    const closing = actor;
+    // Invalidate state before calling external close(): a malicious/faulty
+    // injected handle cannot keep this session active or prevent restart.
     actor = null;
     starting = false;
+    try { closing?.close(); } catch { /* stop remains terminal and idempotent */ }
   }
   return Object.freeze({
     start,
