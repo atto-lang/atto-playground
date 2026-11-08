@@ -34,7 +34,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       for (const resolve of waiters) resolve(terminalResult);
       return;
     }
-    if (fault || closed || actors.every(a => a.done === a.sent)) {
+    if (fault || closed || actors.every(a => a.ready && a.done === a.sent)) {
       terminalResult = fault || (closed ? 'E_ACTOR_CANCELLED: actor host closed' : null);
       terminal = true;
       const waiters = drainWaiters.splice(0);
@@ -52,6 +52,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       check();
     } else if (data?.kind === 'ready' && !a.ready) {
       a.ready = true;
+      check();
     } else {
       fail(a, 'E_ACTOR_PROTOCOL: unexpected actor worker message');
     }
