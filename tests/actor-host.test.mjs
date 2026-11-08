@@ -86,6 +86,24 @@ test('actor state is private per instance and mail is FIFO with sequence numbers
   assert.equal(FakeWorker.live, 0, 'every actor worker is terminated');
 });
 
+test('spawned actor with no mail must initialize before the run drains', async () => {
+  const r = await runActors(`define actor Idle as
+  receive(ActorMail<int> mail): void {
+    stdio.println(mail.value);
+    return;
+  }
+end
+pub fnc main(): int {
+  val idle = spawn Idle();
+  return 9;
+}`);
+  assert.equal(r.value, 9n);
+  assert.equal(r.fault, null);
+  assert.equal(r.actors, 1);
+  assert.equal(r.stdout, '');
+  assert.equal(FakeWorker.live, 0, 'ready idle worker is terminated after successful drain');
+});
+
 test('a panicking actor fails the run with its name, keeping earlier output', async () => {
   const r = await runActors(`define actor W as
   receive(ActorMail<int> mail): void {
