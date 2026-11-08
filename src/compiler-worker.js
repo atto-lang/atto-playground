@@ -6,6 +6,16 @@ const COMPILER_URL = new URL(`../public/atto_compiler.wasm?sha256=${COMPILER_SHA
 let compilerPromise;
 self.onmessage = async ({ data }) => {
   try {
+    // Reject invalid/oversized untrusted requests before downloading or
+    // instantiating the compiler, including UTF-16-short multibyte input.
+    const kind = data?.kind ?? 'program';
+    if (kind !== 'program' && kind !== 'actor') throw new Error('Unsupported compile target');
+    if (typeof data?.source !== 'string') throw new TypeError('Source must be text');
+    if (data.source.length > 65536 || new TextEncoder().encode(data.source).byteLength > 65536) {
+      self.postMessage({ok:false, diagnostics:[{line:1,column:1,
+        message:'E_SOURCE_LIMIT: source exceeds 65536 UTF-8 bytes'}]});
+      return;
+    }
     if (!compilerPromise) {
       compilerPromise = fetch(COMPILER_URL, { cache: 'force-cache', credentials: 'omit' })
         .then(async response => {
@@ -16,8 +26,6 @@ self.onmessage = async ({ data }) => {
         });
     }
     const compiler = await compilerPromise;
-    const kind = data?.kind ?? 'program';
-    if (kind !== 'program' && kind !== 'actor') throw new Error('Unsupported compile target');
     const compiled = kind === 'actor'
       ? compiler.compileActor(data.source)
       : compiler.compile(data.source);
