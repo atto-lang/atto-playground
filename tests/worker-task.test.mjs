@@ -137,3 +137,40 @@ test('throwing terminate cannot hide structured-clone or worker error', async ()
   assert.deepEqual(FakeWorker.instances.map(w=>w.terminated),[1,1]);
   assert.equal(task.cancel(),false);
 });
+
+test('synchronous timer expiry never sends the cancelled worker payload', async () => {
+  FakeWorker.instances = [];
+  const task = createWorkerTask({
+    WorkerImpl: FakeWorker,
+    setTimer(callback) { callback(); return {key:'already-expired'}; },
+    clearTimer() {},
+  });
+  await assert.rejects(task.request('./compiler-worker.js',{kind:'actor',source:'secret'},1000),
+    /Execution deadline exceeded/);
+  assert.equal(FakeWorker.instances.length, 1);
+  assert.equal(FakeWorker.instances[0].terminated, 1);
+  assert.equal(FakeWorker.instances[0].payload, undefined,
+    'expired work must never reach the worker');
+  assert.equal(task.cancel(), false);
+});
+
+test('throwing clearTimer preserves completion, cancellation and subsequent worker admission', async () => {
+  FakeWorker.instances = [];
+  let clears = 0;
+  const task = createWorkerTask({
+    WorkerImpl: FakeWorker,
+    clearTimer() {clears++;throw new Error('injected timer cleanup failure');},
+  });
+  const first = task.request('./compiler-worker.js',{kind:'first'},1000);
+  FakeWorker.instances[0].reply({ok:true,value:42});
+  assert.deepEqual(await first,{ok:true,value:42});
+  const second = task.request('./compiler-worker.js',{kind:'second'},1000);
+  assert.equal(task.cancel(),true);
+  await assert.rejects(second,/Operation cancelled/);
+  const third = task.request('./compiler-worker.js',{kind:'third'},1000);
+  FakeWorker.instances[2].failDecode();
+  await assert.rejects(third,/Worker response could not be decoded/);
+  assert.deepEqual(FakeWorker.instances.map(w=>w.terminated),[1,1,1]);
+  assert.ok(clears>=3,'each settlement attempted timer cleanup');
+  assert.equal(task.cancel(),false);
+});
