@@ -104,10 +104,10 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   const drainWaiters = [];
   const workerIdentities = new Set();
 
-  const label = a => `${a.name}#${a.id}@${a.generation}`;
+  const label = a => `${a.name}#${a.id}`;
   function resolve(handle) {
     const decoded = decodeActorRef(handle);
-    if (!decoded) throw new Error('E_ACTOR_REF_STALE: invalid or expired actor reference');
+    if (!decoded) throw new Error('E_ACTOR_REF_STALE: invalid actor reference (expired or stale)');
     const actor = actors[decoded.slot];
     if (!actor || actor.generation !== decoded.generation || actor.state === 'stopped' || actor.state === 'failed') throw new Error('E_ACTOR_REF_STALE: invalid or expired actor reference');
     return actor;
@@ -118,11 +118,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if(worker){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
   }
   function startWorker(a) {
-    let worker=null;
+    let worker=null, ownsWorker=false;
     try {
       worker=new WorkerImpl(workerUrl,{type:'module'});
       if(!worker||workerIdentities.has(worker)) throw new Error('E_ACTOR_ISOLATION: duplicate worker identity');
-      workerIdentities.add(worker); a.worker=worker; a.ready=false; a.state='starting';
+      workerIdentities.add(worker); ownsWorker=true; a.worker=worker; a.ready=false; a.state='starting';
       const generation=a.generation;
       worker.onmessage=event=>{if(closed||a.generation!==generation||a.worker!==worker)return;onMessage(a,event.data,generation,worker);};
       worker.onerror=event=>{event?.preventDefault?.();if(a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR: worker failed to load or execute');};
@@ -130,7 +130,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       a.initTimer=setTimer(()=>{if(!a.ready&&!closed&&a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR_INIT_TIMEOUT: actor worker did not become ready');},initTimeoutMs);
       worker.postMessage({kind:'init',wasm:new Uint8Array(wasm),type:a.type});
     } catch(error) {
-      if(worker&&workerIdentities.has(worker)){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
+      if(worker&&ownsWorker){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
       if(a.worker===worker)a.worker=null;
       if(a.initTimer!==null){clearTimer(a.initTimer);a.initTimer=null;}
       throw error;
@@ -185,11 +185,12 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     const a={id,generation,type,name:names[type],sent:0,done:0,ready:false,state:'starting',worker:null,initTimer:null};
     actorMemoryBytes+=actorMemoryBytesPerInstance;
     try{startWorker(a);actors.push(a);return encodeActorRef(id,generation);}
-    catch(error){actorMemoryBytes-=actorMemoryBytesPerInstance;fail(a,'E_ACTOR_INIT: worker initialization failed');throw error;}
+    catch(error){actorMemoryBytes-=actorMemoryBytesPerInstance;fail(a,error?.message?.startsWith('E_ACTOR_ISOLATION:')?error.message:'E_ACTOR_INIT: worker initialization failed');throw error;}
   }
 
   function restart(handle) {
     if(closed)throw new Error('E_ACTOR: actor host closed');
+    if(terminal)throw new Error('E_ACTOR_RESTART_CLOSED: actor host has already drained');
     const a=resolve(handle);
     if(a.state!=='running'||!a.ready||a.done!==a.sent)throw new Error('E_ACTOR_RESTART_BUSY: actor must be ready with an empty mailbox');
     if(a.generation>=MAX_ACTOR_GENERATION){a.state='failed';fail(a,'E_ACTOR_GENERATION_EXHAUSTED');detach(a);throw new Error('E_ACTOR_GENERATION_EXHAUSTED: actor generation cannot wrap');}
