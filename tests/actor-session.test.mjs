@@ -186,3 +186,35 @@ test('malformed returned actor handle is rejected even when cleanup throws', asy
   assert.equal(session.starting,false);
   assert.doesNotThrow(() => session.stop());
 });
+
+test('oversized ASCII and multibyte actor source is refused before compiler dispatch', async () => {
+  let compiles=0,spawns=0;
+  const session=createActorSession({
+    compile:async()=>{compiles++;return {ok:true,wasm:bytes()};},
+    spawn:async()=>{spawns++;return {close(){},send:async x=>x,closed:false};},
+  });
+  for(const source of ['a'.repeat(65537),'🚀'.repeat(16385)]) {
+    await assert.rejects(session.start(source),/E_SOURCE_LIMIT/);
+    assert.equal(session.starting,false);
+    assert.equal(session.active,false);
+  }
+  assert.deepEqual([compiles,spawns],[0,0], 'input must be bounded before any compiler or actor work');
+  await session.start('define actor A as receive(int x): int { return x; } end');
+  assert.deepEqual([compiles,spawns],[1,1], 'valid source must recover after rejected input');
+  session.stop();
+});
+
+test('exact actor source-byte boundary is admitted while excess multibyte encoding is not', async () => {
+  let actualLength=0;
+  const session=createActorSession({
+    compile:async source=>{actualLength=new TextEncoder().encode(source).length;return {ok:true,wasm:bytes()};},
+    spawn:async()=>({send:async x=>x,close(){},closed:false}),
+  });
+  await session.start(' '.repeat(65536));
+  assert.equal(actualLength,65536);
+  session.stop();
+  await assert.rejects(session.start('é'.repeat(32769)),/E_SOURCE_LIMIT/);
+  await assert.rejects(session.start('🛡'.repeat(16385)),/E_SOURCE_LIMIT/);
+  assert.equal(session.starting,false);
+  assert.equal(session.active,false);
+});
