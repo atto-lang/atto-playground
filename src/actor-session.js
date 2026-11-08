@@ -44,6 +44,12 @@ export function createActorSession({ compile = null, spawn = spawnWasmActor } = 
   async function start(source) {
     if (starting || actor) throw new Error('E_ACTOR_ALREADY_RUNNING');
     if (typeof source !== 'string') throw new TypeError('Actor source must be text');
+    // Bound untrusted actor source before allocating a compiler worker or
+    // structured-cloning the payload. UTF-16 length alone is insufficient.
+    const sourceCap = 64 * 1024;
+    if (source.length > sourceCap || new TextEncoder().encode(source).byteLength > sourceCap) {
+      throw new RangeError('E_SOURCE_LIMIT: actor source exceeds 65536 UTF-8 bytes');
+    }
     starting = true;
     const id = ++generation;
     let spawned = null;
