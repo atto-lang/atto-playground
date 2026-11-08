@@ -32,6 +32,13 @@ export function validateActorGuest(bytes) {
   if (!(bytes instanceof Uint8Array) || !bytes.length || bytes.byteLength > ACTOR_MAX_WASM_BYTES) {
     throw new Error('Invalid or oversized actor guest');
   }
+  // Take a private immutable-input snapshot before inspection. A Uint8Array
+  // backed by SharedArrayBuffer can be changed by another worker between
+  // validate(), the section-policy walk and Module() without this copy.
+  // All three decisions must be about the SAME bytes, not attacker-mutable
+  // storage. Even a concurrent write during copy only affects the snapshot
+  // being validated; it cannot change it after the policy checks.
+  bytes = new Uint8Array(bytes);
   if (!WebAssembly.validate(bytes)) throw new Error('Invalid actor Wasm');
   const cursor = { at: 8 };
   const signatures = [], functionTypes = [];
