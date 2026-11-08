@@ -28,7 +28,9 @@ export async function spawnWasmActor(wasm, {
     closed = true;
     clearTimeout(initTimer);
     worker.onmessage = worker.onerror = worker.onmessageerror = null;
-    worker.terminate();
+    // Worker termination is best-effort; a faulty injected WorkerImpl must
+    // never strand initialization or outstanding sends behind a thrown close.
+    try { worker.terminate(); } catch { /* settle promises regardless */ }
     const error = reason instanceof Error ? reason : new Error(String(reason));
     if (!ready) readyReject(error);
     for (const task of pending.values()) {
