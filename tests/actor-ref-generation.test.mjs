@@ -25,7 +25,9 @@ function make(){WorkerMock.all=[];return createActorHost({wasm:compiled.wasm,nam
 test('ActorRef i32 encodes slot and nonzero bounded generation',()=>{
  for(let slot=0;slot<16;slot++)for(const generation of [1,2,99,MAX_ACTOR_GENERATION])assert.deepEqual(decodeActorRef(encodeActorRef(slot,generation)),{slot,generation});
  for(const [slot,generation] of [[-1,1],[16,1],[0,0],[0,MAX_ACTOR_GENERATION+1]])assert.throws(()=>encodeActorRef(slot,generation),/invalid actor slot or generation/);
- for(const h of [0,-1,1,0x80000000,NaN,1.5])assert.equal(decodeActorRef(h),null);
+ assert.deepEqual(decodeActorRef(0),{slot:0,generation:1});
+ assert.deepEqual(decodeActorRef(15),{slot:15,generation:1});
+ for(const h of [-1,0x80000000,NaN,1.5])assert.equal(decodeActorRef(h),null);
 });
 test('restart increments generation and rejects stale handles',()=>{
  const host=make(),old=host.spawn(0),w1=WorkerMock.all[0];w1.ready();
