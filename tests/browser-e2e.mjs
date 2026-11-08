@@ -224,7 +224,7 @@ try {
   assert.match(s.output,/^main sent 5 messages\n1\n3\n6\n10\n15\nmain\(\) → 0/);
   assert.match(s.output,/1 actor in dedicated Web Workers/);
   ok('define actor: mail is delivered FIFO to actor state in a dedicated Web Worker');
-  await source('define actor Flag as\\n  receive(ActorMail<bool> mail): void {\\n    if mail.value then\\n      stdio.println("yes");\\n    else\\n      stdio.println("no");\\n    fi\\n    return;\\n  }\\nend\\npub fnc main(): int {\\n  val flag = spawn Flag();\\n  flag.send(true);\\n  flag.send(false);\\n  stdio.println("main queued bool mail");\\n  return 0;\\n}');
+  await source('define actor Flag as\n  receive(ActorMail<bool> mail): void {\n    if mail.value then\n      stdio.println("yes");\n    else\n      stdio.println("no");\n    fi\n    return;\n  }\nend\npub fnc main(): int {\n  val flag = spawn Flag();\n  flag.send(true);\n  flag.send(false);\n  stdio.println("main queued bool mail");\n  return 0;\n}');
   s=await run('success','main() → 0');
   assert.match(s.output,/^main queued bool mail\\nyes\\nno\\nmain\\(\\) → 0/);
   assert.match(s.output,/1 actor in dedicated Web Workers/);
