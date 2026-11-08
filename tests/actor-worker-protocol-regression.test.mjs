@@ -83,7 +83,7 @@ test('duplicate delivery is rejected with no second guest invocation', async () 
 });
 
 test('missing, negative, fractional and overflowed sequences fail before executing guest', async t => {
-  for(const sequence of [1,-1,0.5,Number.MAX_SAFE_INTEGER]) {
+  for(const sequence of [undefined,1,-1,0.5,10_000,Number.MAX_SAFE_INTEGER]) {
     await t.test('sequence ' + sequence, async () => {
       const w=await session();
       try {
