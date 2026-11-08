@@ -303,6 +303,28 @@ try {
   assert.deepEqual(actorProbe,{values:['40','42'],isolated:'7',invalid:true,closed:true});
   ok('dedicated Web Workers execute real stateful Wasm actor messages with FIFO, isolation and closure');
 
+  // Concurrent actor mailboxes must remain isolated even under burst traffic.
+  // Closing one actor must not invalidate a separate worker or its state.
+  const actorIsolationStress=await js(`(async()=>{
+    const {spawnWasmActor}=await import('/play/src/actor-runtime.js');
+    const bytes=Uint8Array.from([0,97,115,109,1,0,0,0,1,6,1,96,1,126,1,126,3,2,1,0,6,6,1,126,1,66,0,11,7,11,1,7,114,101,99,101,105,118,101,0,0,10,13,1,11,0,35,0,32,0,124,36,0,35,0,11]);
+    const actors=await Promise.all(Array.from({length:3},()=>spawnWasmActor(bytes,{timeoutMs:3000})));
+    try {
+      const groups=await Promise.all(actors.map(async a=>{
+        const pending=Array.from({length:16},()=>a.send(1n));
+        return (await Promise.all(pending)).map(String);
+      }));
+      const expected=Array.from({length:16},(_,i)=>String(i+1));
+      const isolated=groups.every(g=>g.length===16&&g.every((x,i)=>x===expected[i]));
+      actors[1].close();
+      let dead=false;
+      try {await actors[1].send(1n);} catch(e){dead=/E_ACTOR_CLOSED/.test(e.message);}
+      const alive=[await actors[0].send(2n),await actors[2].send(3n)];
+      return {isolated,dead,alive:alive.map(String)};
+    } finally {actors.forEach(a=>a.close());}
+  })()`);
+  assert.deepEqual(actorIsolationStress,{isolated:true,dead:true,alive:['18','19']});
+  ok('three real actor workers preserve independent FIFO state during mailbox bursts and neighbor closure');
   // Real Chromium sends raw packets to the dedicated worker. Skipped or
   // replayed mailbox IDs must fail before invoking the guest Wasm.
   const sequenceProbe=await js(`(async()=>{
