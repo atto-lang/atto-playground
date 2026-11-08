@@ -229,3 +229,71 @@ test('guest panic notice rejects every outstanding send and prevents further mai
   assert.equal(worker.terminated, true);
   await assert.rejects(actor.send(3n), /E_ACTOR_CLOSED/);
 });
+
+test('throwing worker terminate cannot strand initialization or pending mailbox promises', async () => {
+  let initTerminations = 0;
+  class BrokenInitWorker {
+    postMessage() {}
+    terminate() {
+      initTerminations++;
+      throw new Error('injected worker termination failure');
+    }
+  }
+  await assert.rejects(
+    spawnWasmActor(COUNTER_WASM, {WorkerImpl: BrokenInitWorker, timeoutMs: 5}),
+    /E_ACTOR_TIMEOUT: initialization/
+  );
+  assert.equal(initTerminations, 1);
+
+  let liveWorker;
+  class BrokenLiveWorker {
+    constructor() { this.messages = []; this.terminations = 0; liveWorker = this; }
+    postMessage(packet) {
+      if (packet.kind === 'init') queueMicrotask(() => this.onmessage?.({data:{kind:'ready'}}));
+      if (packet.kind === 'message') this.messages.push(packet);
+    }
+    terminate() {
+      this.terminations++;
+      throw new Error('injected worker termination failure');
+    }
+  }
+  const actor = await spawnWasmActor(COUNTER_WASM,
+    {WorkerImpl: BrokenLiveWorker, maxMailbox: 3, timeoutMs: 500});
+  const pending = [actor.send(1n), actor.send(2n), actor.send(3n)];
+  assert.deepEqual(liveWorker.messages.map(x => x.id), [1, 2, 3]);
+  assert.doesNotThrow(() => actor.close(), 'terminal cleanup must be exception-safe');
+  const settled = await Promise.allSettled(pending);
+  for (const result of settled) {
+    assert.equal(result.status, 'rejected');
+    assert.match(result.reason.message, /E_ACTOR_CLOSED/);
+  }
+  assert.equal(actor.closed, true);
+  assert.equal(liveWorker.terminations, 1);
+  actor.close();
+  assert.equal(liveWorker.terminations, 1);
+  await assert.rejects(actor.send(4n), /E_ACTOR_CLOSED/);
+});
+
+test('throwing terminate during worker protocol fault still rejects all pending messages', async () => {
+  let worker;
+  class FaultyWorker {
+    constructor() { this.messages = []; this.terminations = 0; worker = this; }
+    postMessage(packet) {
+      if (packet.kind === 'init') queueMicrotask(() => this.onmessage?.({data:{kind:'ready'}}));
+      if (packet.kind === 'message') {
+        this.messages.push(packet);
+        if (this.messages.length === 2) queueMicrotask(() =>
+          this.onmessage?.({data:{kind:'result',id:999,value:0n}}));
+      }
+    }
+    terminate() { this.terminations++; throw Error('injected termination error'); }
+  }
+  const actor = await spawnWasmActor(COUNTER_WASM, {WorkerImpl: FaultyWorker, timeoutMs: 500});
+  const pending = await Promise.allSettled([actor.send(4n),actor.send(5n)]);
+  for (const result of pending) {
+    assert.equal(result.status, 'rejected');
+    assert.match(result.reason.message, /E_ACTOR_PROTOCOL/);
+  }
+  assert.equal(actor.closed, true);
+  assert.equal(worker.terminations, 1);
+});
