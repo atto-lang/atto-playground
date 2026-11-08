@@ -297,3 +297,46 @@ test('throwing terminate during worker protocol fault still rejects all pending 
   assert.equal(actor.closed, true);
   assert.equal(worker.terminations, 1);
 });
+
+test('actor guest validation snapshots SharedArrayBuffer before checking policy and compiling', () => {
+  const source = new Uint8Array(new SharedArrayBuffer(COUNTER_WASM.byteLength));
+  source.set(COUNTER_WASM);
+  const originalValidate = WebAssembly.validate;
+  let inspected = false;
+  try {
+    // Deterministic stand-in for another worker modifying shared bytes at
+    // the exact validate/section-policy boundary. The validator must use
+    // its private snapshot, not the later mutated source buffer.
+    WebAssembly.validate = input => {
+      const ok = originalValidate.call(WebAssembly, input);
+      source[32] = 88; // rename 'receive' export to invalid 'Xeceive'
+      inspected = true;
+      return ok;
+    };
+    const module = validateActorGuest(source);
+    assert.equal(inspected, true);
+    assert.deepEqual(WebAssembly.Module.exports(module).map(x=>x.name), ['receive']);
+    assert.equal(new WebAssembly.Instance(module,{}).exports.receive(42n),42n);
+  } finally {
+    WebAssembly.validate = originalValidate;
+  }
+  assert.equal(source[32], 88, 'source really was mutated during validation');
+  assert.throws(()=>validateActorGuest(source),/receive function export/);
+});
+
+test('actor ABI rejects hidden memory and table sections in otherwise valid Wasm', () => {
+  // Insert forbidden sections after the function declarations and before
+  // the global section of the legitimate stateful scalar actor fixture.
+  const insert = (section) => Uint8Array.from([
+    ...COUNTER_WASM.slice(0,20), ...section, ...COUNTER_WASM.slice(20)
+  ]);
+  for (const [name, section, code] of [
+    ['memory',[5,3,1,0,1],5],
+    ['table',[4,4,1,0x70,0,1],4],
+  ]) {
+    const moduleBytes=insert(section);
+    assert.equal(WebAssembly.validate(moduleBytes),true,name+' fixture must be a valid module');
+    assert.throws(()=>validateActorGuest(moduleBytes),
+      new RegExp('Actor guest section not admitted: '+code),name+' cannot be hidden');
+  }
+});
