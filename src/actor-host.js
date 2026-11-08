@@ -133,15 +133,18 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (actorMemoryBytes + actorMemoryBytesPerInstance > MAX_TOTAL_ACTOR_MEMORY_BYTES) throw new Error('E_ACTOR_TOTAL_MEMORY: aggregate actor memory budget exceeded');
     const ref = actors.length;
     const a = { ref, type, name: names[type], sent: 0, done: 0, ready: false, worker: null, initTimer: null };
+    let ownsWorker = false;
     actorMemoryBytes += actorMemoryBytesPerInstance;
-    try { a.worker = new WorkerImpl(workerUrl, { type: 'module' });
+    try {
+      a.worker = new WorkerImpl(workerUrl, { type: 'module' });
     if (!a.worker) throw new Error('Worker constructor returned no worker');
-    if (!a.worker || workerIdentities.has(a.worker)) {
+      if (!a.worker || workerIdentities.has(a.worker)) {
       // A mock or host adapter must never assign two actor identities to one Worker.
-      fail(a, 'E_ACTOR_ISOLATION: duplicate worker identity');
-      throw new Error(fault);
-    }
-    workerIdentities.add(a.worker);
+        fail(a, 'E_ACTOR_ISOLATION: duplicate worker identity');
+        throw new Error(fault);
+      }
+      workerIdentities.add(a.worker);
+      ownsWorker = true;
       a.worker.onmessage = event => onMessage(a, event.data);
       a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
       a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
@@ -155,12 +158,12 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     } catch (error) {
       if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
       try {
-        if (a.worker) {
+        if (ownsWorker && a.worker) {
           a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
           a.worker.terminate();
         }
       } catch { /* The host must still fail instead of admitting this actor. */ }
-      if (a.worker) workerIdentities.delete(a.worker);
+      if (ownsWorker && a.worker) workerIdentities.delete(a.worker);
       actorMemoryBytes -= actorMemoryBytesPerInstance;
       fail(a, 'E_ACTOR_INIT: worker initialization failed');
       throw error;
@@ -206,6 +209,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       } catch { /* Continue cleanup of all remaining actor workers. */ }
     }
     workerIdentities.clear();
+    actorMemoryBytes = 0;
+    pendingMessages = 0;
   }
 
   return { spawn, send, drain, close,
