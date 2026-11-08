@@ -226,7 +226,7 @@ try {
   ok('define actor: mail is delivered FIFO to actor state in a dedicated Web Worker');
   await source('define actor Flag as\n  receive(ActorMail<bool> mail): void {\n    if mail.value then\n      stdio.println("yes");\n    else\n      stdio.println("no");\n    fi\n    return;\n  }\nend\npub fnc main(): int {\n  val flag = spawn Flag();\n  flag.send(true);\n  flag.send(false);\n  stdio.println("main queued bool mail");\n  return 0;\n}');
   s=await run('success','main() → 0');
-  assert.match(s.output,/^main queued bool mail\nyes\nno\nmain\\(\\) → 0/);
+  assert.match(s.output,/^main queued bool mail\nyes\nno\nmain\(\) → 0/);
   assert.match(s.output,/1 actor in dedicated Web Workers/);
   ok('ActorMail<bool> true/false round trips through a real compiled guest and dedicated browser Worker');
   const counter='define actor Counter as\n  let int total = 0;\n  receive(ActorMail<int> mail): void {\n    self.total = self.total + mail.value;\n    stdio.println(mail.sequence * 1000 + self.total);\n    return;\n  }\nend\n';
