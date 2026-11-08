@@ -425,6 +425,28 @@ try {
   assert.deepEqual(timeoutProbe,{timeout:true,closed:true});
   ok('non-cooperative guest Wasm is terminated by worker deadline');
 
+  // One runaway worker cannot monopolize the browser's actor scheduler or
+  // terminate a healthy sibling. Every pending message on the timed-out
+  // worker must reject, and the surviving actor must continue accumulating.
+  const watchdogIsolation=await js(`(async()=>{
+    const {spawnWasmActor}=await import('/play/src/actor-runtime.js');
+    const slow=await spawnWasmActor(Uint8Array.from(${JSON.stringify(Array.from(LOOP_WASM))}),{timeoutMs:150,maxMailbox:3});
+    const healthy=await spawnWasmActor(Uint8Array.from(${JSON.stringify(Array.from(COUNTER_WASM))}),{timeoutMs:1000});
+    try {
+      const stuck=[slow.send(1n),slow.send(2n),slow.send(3n)];
+      const before=await healthy.send(40n);
+      const settled=await Promise.allSettled(stuck);
+      const after=await healthy.send(2n);
+      return {before:String(before),after:String(after),
+        timedOut:settled.every(x=>x.status==='rejected'&&/E_ACTOR_TIMEOUT/.test(x.reason.message)),
+        dead:slow.closed,survivorClosed:healthy.closed};
+    } finally {slow.close();healthy.close();}
+  })()`);
+  assert.deepEqual(watchdogIsolation,{before:'40',after:'42',
+    timedOut:true,dead:true,survivorClosed:false});
+  ok('runaway worker times out all queued messages without poisoning a healthy sibling actor');
+
+
   assert.ok(requests.some(r=>r.url.includes('/play/public/atto_compiler.wasm')));
   assert.ok(requests.every(r=>r.method==='GET'),'Unexpected server-side submission of code');
   ok('compiler Wasm served as static GET, no source POST');
