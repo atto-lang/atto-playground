@@ -27,7 +27,7 @@ const receipt = {
   toolchain: process.env.RUSTC,
   target: 'wasm32-unknown-unknown',
   compiler_abi: api.abi_version(),
-  guest_abi: 'atto.browser.guest.v1',
+  guest_abi: 'atto.browser.guest.v2',
   compiler_sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
   compiler_bytes: bytes.length,
 };
