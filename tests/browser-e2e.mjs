@@ -251,8 +251,8 @@ try {
   assert.equal(supervised.siblingUnchanged, true);
   assert.equal(supervised.truncated, false);
   assert.notEqual(supervised.replacement, supervised.oldRef);
-  assert.match(supervised.output,/7\\n/);
-  assert.match(supervised.output,/21\\n/);
+  assert.match(supervised.output,/7\n/);
+  assert.match(supervised.output,/21\n/);
   assert.ok(supervised.events.includes('restart_scheduled'));
   assert.ok(supervised.events.includes('restart_started'));
   ok('supervised panic restarts a real browser Worker, fences stale refs and preserves sibling execution');
