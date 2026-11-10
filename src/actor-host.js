@@ -12,6 +12,27 @@ export const MAX_TOTAL_PENDING_MESSAGES = 20_000;
 export const MAX_SINGLE_ACTOR_MEMORY_BYTES = 1 * 1024 * 1024;
 export const MAX_TOTAL_ACTOR_MEMORY_BYTES = 8 * 1024 * 1024;
 export const MAX_ACTOR_INIT_MS = 5_000;
+export const TERMINATION_REASONS = Object.freeze({
+  NORMAL:'normal', PANIC:'panic', CANCELLED:'cancelled', SHUTDOWN:'shutdown',
+  RESTART_LIMIT:'restart_limit', PROTOCOL:'protocol', INIT_FAILURE:'init_failure'
+});
+export const RESTART_STRATEGIES = Object.freeze({ONE_FOR_ONE:'one-for-one',ONE_FOR_ALL:'one-for-all'});
+export const RESTART_POLICIES = Object.freeze({PERMANENT:'permanent',TRANSIENT:'transient',TEMPORARY:'temporary'});
+const MAX_SUPERVISOR_EVENTS = 64;
+function parseSupervisorConfig(value) {
+  if(value==null)return null;
+  if(typeof value!=='object'||Array.isArray(value))throw new TypeError('E_SUPERVISOR_CONFIG: expected policy object');
+  const strategy=value.strategy??'one-for-one',policy=value.policy??'permanent';
+  const maxRestarts=value.maxRestarts??3,windowMs=value.windowMs??60_000;
+  const initialBackoffMs=value.initialBackoffMs??10,maxBackoffMs=value.maxBackoffMs??1_000;
+  if(!Object.values(RESTART_STRATEGIES).includes(strategy)||!Object.values(RESTART_POLICIES).includes(policy)||
+    !Number.isSafeInteger(maxRestarts)||maxRestarts<0||maxRestarts>100||
+    !Number.isSafeInteger(windowMs)||windowMs<1||windowMs>86_400_000||
+    !Number.isSafeInteger(initialBackoffMs)||initialBackoffMs<1||initialBackoffMs>60_000||
+    !Number.isSafeInteger(maxBackoffMs)||maxBackoffMs<initialBackoffMs||maxBackoffMs>60_000)
+    throw new TypeError('E_SUPERVISOR_CONFIG: invalid strategy, restart policy or limits');
+  return Object.freeze({strategy,policy,maxRestarts,windowMs,initialBackoffMs,maxBackoffMs});
+}
 const WASM_PAGE_BYTES = 65_536;
 const MAX_GUEST_MEMORY_PAGES = 16;
 
@@ -93,18 +114,30 @@ const I64_MIN = -(2n ** 63n), I64_MAX = 2n ** 63n - 1n;
 export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Worker,
   workerUrl = new URL('./actor-worker.js', import.meta.url),
   initTimeoutMs = MAX_ACTOR_INIT_MS,
-  setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout }) {
+  setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout,
+  supervision = null, now = Date.now }) {
   if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
   if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
   if (!Number.isSafeInteger(initTimeoutMs) || initTimeoutMs <= 0 || typeof setTimer !== 'function' || typeof clearTimer !== 'function') throw new TypeError('invalid actor init timeout configuration');
+  if(typeof now!=='function')throw new TypeError('E_SUPERVISOR_CONFIG: invalid clock');
+  const supervisor=parseSupervisorConfig(supervision);
   const actorMemoryBytesPerInstance = guestMemoryBudgetBytes(wasm);
   const actors = [];
-  let actorMemoryBytes = 0, pendingMessages = 0;
+  let actorMemoryBytes = 0, pendingMessages = 0, droppedMessages = 0, restartCount = 0;
   let fault = null, closed = false, draining = false, terminal = false, terminalResult = null;
   const drainWaiters = [];
   const workerIdentities = new Set();
+  let restartHistory=[];
+  const supervisorEvents=[];
 
   const label = a => `${a.name}#${a.id}`;
+  function record(event){
+    supervisorEvents.push(Object.freeze({...event}));
+    if(supervisorEvents.length>MAX_SUPERVISOR_EVENTS)supervisorEvents.shift();
+  }
+  function cancelRestart(a){
+    if(a.restartTimer!==null){clearTimer(a.restartTimer);a.restartTimer=null;}
+  }
   function resolve(handle) {
     const decoded = decodeActorRef(handle);
     if (!decoded) throw new Error('E_ACTOR_REF_STALE: invalid actor reference (expired or stale)');
@@ -189,7 +222,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if(actors.length>=MAX_ACTORS)throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     if(actorMemoryBytes+actorMemoryBytesPerInstance>MAX_TOTAL_ACTOR_MEMORY_BYTES)throw new Error('E_ACTOR_TOTAL_MEMORY: aggregate actor memory budget exceeded');
     const id=actors.length,generation=1;
-    const a={id,generation,type,name:names[type],sent:0,done:0,ready:false,state:'starting',worker:null,initTimer:null};
+    const a={id,generation,type,name:names[type],sent:0,done:0,ready:false,state:'starting',worker:null,initTimer:null,restartTimer:null};
     actorMemoryBytes+=actorMemoryBytesPerInstance;
     try{startWorker(a);actors.push(a);return encodeActorRef(id,generation);}
     catch(error){actorMemoryBytes-=actorMemoryBytesPerInstance;fail(a,error?.message?.startsWith('E_ACTOR_ISOLATION:')?error.message:'E_ACTOR_INIT: worker initialization failed');throw error;}
