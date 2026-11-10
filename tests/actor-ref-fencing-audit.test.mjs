@@ -130,3 +130,107 @@ test('a fired but cancelled old-generation startup timer cannot fault a restarte
   assert.ok(cleared.includes(1));
   host.close();
 });
+
+test('retired Worker identity cannot be resurrected by a later restart',async()=>{
+  const shared=new Transport();
+  class ReusedWorker {constructor(){return shared;}}
+  const {host}=setup({WorkerImpl:ReusedWorker});
+  const ref=host.spawn(0);
+  shared.ready();
+  assert.equal(shared.sent.length,1);
+  assert.throws(()=>host.restart(ref),/E_ACTOR_ISOLATION/,
+    'a terminated Worker object must never be readmitted as a new generation');
+  assert.equal(shared.sent.length,1,'no second init was delivered');
+  assert.equal(shared.terminated,1,'retired object terminated exactly once');
+  assert.match(await host.drain(),/E_ACTOR_RESTART/);
+  host.close();
+  assert.equal(shared.terminated,1);
+});
+
+test('throwing Worker callback setters and terminate cannot abort sibling fencing',async()=>{
+  class FragileWorker extends Transport {
+    get onmessage(){return this._onmessage;}
+    set onmessage(value){
+      if(value===null)throw new Error('cannot remove callback');
+      this._onmessage=value;
+    }
+    terminate(){this.terminated++;throw new Error('terminate adapter failure');}
+  }
+  let instances=0;
+  class Adapter {constructor(){return instances++===0?new FragileWorker():new Transport();}}
+  const {host,out}=setup({WorkerImpl:Adapter});
+  const a=host.spawn(0),b=host.spawn(0);
+  const [w0,w1]=Transport.all;
+  w0.ready();w1.ready();
+  const lateMessage=w0.onmessage;
+  host.send(a,1n);host.send(b,2n);
+  assert.doesNotThrow(()=>w0.emit({kind:'done',sequence:99,stdout:'FAKE'}),
+    'a failing cleanup adapter cannot interrupt terminal host shutdown');
+  assert.equal(w0.terminated,1);
+  assert.equal(w1.terminated,1,'sibling must be fenced despite first adapter throwing');
+  assert.equal(out.text,'');
+  assert.doesNotThrow(()=>lateMessage({data:{kind:'done',sequence:0,stdout:'LATE'}}));
+  assert.equal(out.text,'','stale callback is fenced even if its setter rejected null');
+  assert.match(await host.drain(),/E_ACTOR_PROTOCOL/);
+  assert.doesNotThrow(()=>host.close());
+  assert.deepEqual(Transport.all.map(w=>w.terminated),[1,1]);
+});
+
+test('throwing timer cancellation cannot leave a recoverable sibling running',async()=>{
+  let id=0,restartCallback=null,restartId=null;
+  const {host}=setup({
+    supervision:{strategy:'one-for-one',initialBackoffMs:10,maxBackoffMs:10},
+    setTimer:(fn,ms)=>{
+      const token=++id;
+      if(ms===10){restartCallback=fn;restartId=token;}
+      return token;
+    },
+    clearTimer:()=>{throw new Error('clearTimer adapter failed');}
+  });
+  const a=host.spawn(0),b=host.spawn(0);
+  const [w0,w1]=Transport.all;
+  assert.doesNotThrow(()=>{w0.ready();w1.ready();},
+    'startup cancellation is best effort and must not throw into event handlers');
+  host.send(a,1n);
+  w0.emit({kind:'fault',message:'E_PANIC: guest trap',stdout:'',truncated:false});
+  assert.equal(host.stats.restartPending,1);
+  assert.ok(restartId!==null);
+  host.send(b,2n);
+  assert.doesNotThrow(()=>w1.emit({kind:'done',sequence:99}),
+    'a terminal failure must cancel all restart callbacks despite clearTimer throwing');
+  assert.deepEqual([w0.terminated,w1.terminated],[1,1]);
+  assert.equal(host.stats.restartPending,0);
+  assert.match(await host.drain(),/E_ACTOR_PROTOCOL/);
+  const count=Transport.all.length;
+  restartCallback(); // stale callback can arrive after throwing cancellation
+  assert.equal(Transport.all.length,count,'stale timer must not resurrect a Worker');
+  assert.doesNotThrow(()=>host.close());
+});
+
+test('invalid or synchronously invoked restart timers fail closed without Worker admission',async t=>{
+  for(const variant of ['null-token','synchronous']){
+    await t.test(variant,async()=>{
+      let id=0;
+      const {host}=setup({
+        supervision:{strategy:'one-for-one',initialBackoffMs:10,maxBackoffMs:10},
+        setTimer:(fn,ms)=>{
+          if(ms===10){
+            if(variant==='synchronous'){fn();return ++id;}
+            return null;
+          }
+          return ++id;
+        },
+        clearTimer:()=>{}
+      });
+      const ref=host.spawn(0),worker=Transport.all[0];
+      worker.ready();host.send(ref,1n);
+      assert.doesNotThrow(()=>worker.emit({kind:'fault',
+        message:'E_PANIC: guest trap',stdout:'',truncated:false}));
+      assert.match(await host.drain(),/E_SUPERVISOR_TIMER/);
+      assert.equal(host.stats.restartPending,0);
+      assert.equal(Transport.all.length,1,'invalid timer cannot admit a replacement');
+      assert.equal(worker.terminated,1);
+      host.close();
+    });
+  }
+});
