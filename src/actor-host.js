@@ -6,12 +6,13 @@
  * numbers from 0. The host lives inside the runner worker: terminating the
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
-import { appendCapped } from './guest.js';
+import { appendCapped, MAX_ACTOR_TYPES } from './guest.js';
 
 export const MAX_TOTAL_PENDING_MESSAGES = 20_000;
 export const MAX_SINGLE_ACTOR_MEMORY_BYTES = 1 * 1024 * 1024;
 export const MAX_TOTAL_ACTOR_MEMORY_BYTES = 8 * 1024 * 1024;
 export const MAX_ACTOR_INIT_MS = 5_000;
+export const MAX_ACTOR_WASM_BYTES = 1 << 20;
 export const TERMINATION_REASONS = Object.freeze({
   NORMAL:'normal', PANIC:'panic', CANCELLED:'cancelled', SHUTDOWN:'shutdown',
   RESTART_LIMIT:'restart_limit', PROTOCOL:'protocol', INIT_FAILURE:'init_failure'
@@ -55,6 +56,9 @@ function readUleb(bytes, state, end) {
  * current minimum. The browser compiler emits at most one non-growable 16-page
  * memory; rejecting other shapes makes accounting deterministic. */
 export function guestMemoryBudgetBytes(wasm) {
+  if (wasm instanceof Uint8Array && wasm.byteLength > MAX_ACTOR_WASM_BYTES) {
+    throw new Error('E_ACTOR_MEMORY_POLICY: guest module exceeds 1 MiB admission limit');
+  }
   if (!(wasm instanceof Uint8Array) || wasm.length < 8 ||
       wasm[0] !== 0 || wasm[1] !== 0x61 || wasm[2] !== 0x73 || wasm[3] !== 0x6d ||
       wasm[4] !== 1 || wasm[5] !== 0 || wasm[6] !== 0 || wasm[7] !== 0) {
@@ -87,6 +91,16 @@ export function guestMemoryBudgetBytes(wasm) {
     state.pos = end;
   }
   if (budget > MAX_SINGLE_ACTOR_MEMORY_BYTES) throw new Error('E_ACTOR_MEMORY_POLICY: actor memory exceeds 1 MiB');
+  // The local memory section alone is not the whole memory footprint:
+  // the Wasm import section can also declare a memory. Validate the complete
+  // module and reject memory imports before assigning any per-run quota.
+  // This also prevents malformed non-memory sections from reaching a Worker.
+  let module;
+  try { module = new WebAssembly.Module(wasm); }
+  catch { throw new Error('E_ACTOR_MEMORY_POLICY: invalid or unsupported Wasm module'); }
+  if (WebAssembly.Module.imports(module).some(item => item.kind === 'memory')) {
+    throw new Error('E_ACTOR_MEMORY_POLICY: imported memories are not admitted');
+  }
   return budget;
 }
 
@@ -117,11 +131,23 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout,
   supervision = null, now = Date.now }) {
   if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
-  if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
+  if (!Array.isArray(names) || names.length === 0 || names.length > MAX_ACTOR_TYPES ||
+      !names.every(name => typeof name === 'string' &&
+        /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name))) {
+    throw new Error('actor host needs a valid actor table');
+  }
   if (!Number.isSafeInteger(initTimeoutMs) || initTimeoutMs <= 0 || typeof setTimer !== 'function' || typeof clearTimer !== 'function') throw new TypeError('invalid actor init timeout configuration');
   if(typeof now!=='function')throw new TypeError('E_SUPERVISOR_CONFIG: invalid clock');
   const supervisor=parseSupervisorConfig(supervision);
-  const actorMemoryBytesPerInstance = guestMemoryBudgetBytes(wasm);
+  // Both the quota proof and subsequent Worker spawns/restarts must use the
+  // SAME immutable-by-ownership byte snapshot. Caller-owned Uint8Array and
+  // actor table arrays may otherwise be edited after admission.
+  if (wasm.byteLength > MAX_ACTOR_WASM_BYTES) {
+    throw new Error('E_ACTOR_MEMORY_POLICY: guest module exceeds 1 MiB admission limit');
+  }
+  const admittedWasm = new Uint8Array(wasm);
+  const admittedNames = Object.freeze([...names]);
+  const actorMemoryBytesPerInstance = guestMemoryBudgetBytes(admittedWasm);
   const actors = [];
   let actorMemoryBytes = 0, pendingMessages = 0, droppedMessages = 0, restartCount = 0;
   let fault = null, closed = false, draining = false, terminal = false, terminalResult = null;
@@ -161,7 +187,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       worker.onerror=event=>{event?.preventDefault?.();if(a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR: worker failed to load or execute');};
       worker.onmessageerror=()=>{if(a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR_PROTOCOL: undecodable actor message');};
       a.initTimer=setTimer(()=>{if(!a.ready&&!closed&&a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR_INIT_TIMEOUT: actor worker did not become ready');},initTimeoutMs);
-      worker.postMessage({kind:'init',wasm:new Uint8Array(wasm),type:a.type});
+      worker.postMessage({kind:'init',wasm:new Uint8Array(admittedWasm),type:a.type});
     } catch(error) {
       if(worker&&ownsWorker){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
       if(a.worker===worker)a.worker=null;
@@ -311,11 +337,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if(closed)throw new Error('E_ACTOR: actor host closed');
     if(fault)throw new Error('E_ACTOR_FAILED: actor host has failed');
     if(draining)throw new Error('E_ACTOR_FINALIZED: actor host is draining');
-    if(!Number.isInteger(type)||type<0||type>=names.length)throw new Error('E_ACTOR: unknown actor type');
+    if(!Number.isInteger(type)||type<0||type>=admittedNames.length)throw new Error('E_ACTOR: unknown actor type');
     if(actors.length>=MAX_ACTORS)throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     if(actorMemoryBytes+actorMemoryBytesPerInstance>MAX_TOTAL_ACTOR_MEMORY_BYTES)throw new Error('E_ACTOR_TOTAL_MEMORY: aggregate actor memory budget exceeded');
     const id=actors.length,generation=1;
-    const a={id,generation,type,name:names[type],sent:0,done:0,ready:false,state:'starting',worker:null,initTimer:null,restartTimer:null};
+    const a={id,generation,type,name:admittedNames[type],sent:0,done:0,ready:false,state:'starting',worker:null,initTimer:null,restartTimer:null};
     actorMemoryBytes+=actorMemoryBytesPerInstance;
     try{startWorker(a);actors.push(a);return encodeActorRef(id,generation);}
     catch(error){actorMemoryBytes-=actorMemoryBytesPerInstance;fail(a,error?.message?.startsWith('E_ACTOR_ISOLATION:')?error.message:'E_ACTOR_INIT: worker initialization failed');throw error;}
