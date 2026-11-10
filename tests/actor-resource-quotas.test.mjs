@@ -173,3 +173,23 @@ test('actor type table is snapshotted and validated at host admission',async()=>
   assert.throws(()=>hostFor(bytes,{names:['invalid name']}),/valid actor table/);
   assert.equal(ManualWorker.instances.length,0);
 });
+
+test('actor name accessors are read once and the exact admitted copy is validated',async()=>{
+  const module=memoryModule(1,1,1);
+  const names=['SafeName'];
+  let accesses=0;
+  Object.defineProperty(names,0,{
+    configurable:true, enumerable:true,
+    get(){return ++accesses===1?'SafeName':'Injected Invalid Name';}
+  });
+  const host=hostFor(module,{names});
+  assert.equal(accesses,1,'caller-owned accessor cannot supply a second unvalidated name');
+  const ref=host.spawn(0);
+  const worker=ManualWorker.instances[0];
+  assert.equal(ref,0);
+  worker.onmessage({data:{kind:'unexpected'}});
+  assert.match(await host.drain(),/in actor SafeName#0/);
+  host.close();
+  const sparse=new Array(1);
+  assert.throws(()=>hostFor(module,{names:sparse}),/valid actor table/);
+});
