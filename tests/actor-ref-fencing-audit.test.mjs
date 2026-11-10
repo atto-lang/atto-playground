@@ -56,13 +56,15 @@ test('ready replies cannot inject arbitrary stdout or truncated flags',async()=>
 
 test('genuine fault preserves prior guest output and seals the host to further commands',async()=>{
   const {host,out}=setup();
-  const ref=host.spawn(0),worker=Transport.all[0];
-  worker.ready();host.send(ref,1n);
+  const ref=host.spawn(0),sibling=host.spawn(0),worker=Transport.all[0];
+  worker.ready();Transport.all[1].ready();host.send(ref,1n);
   worker.emit({kind:'fault',message:'E_PANIC: guest trap',stdout:'prior output\\n',truncated:false});
   assert.equal(out.text,'prior output\\n');
-  assert.throws(()=>host.send(ref,3n),/E_ACTOR_FAILED/);
+  assert.throws(()=>host.send(ref,3n),/E_ACTOR_REF_STALE/);
+  assert.throws(()=>host.send(sibling,3n),/E_ACTOR_FAILED/);
   assert.throws(()=>host.spawn(0),/E_ACTOR_FAILED/);
-  assert.throws(()=>host.restart(ref),/E_ACTOR_FAILED/);
+  assert.throws(()=>host.restart(ref),/E_ACTOR_REF_STALE/);
+  assert.throws(()=>host.restart(sibling),/E_ACTOR_FAILED/);
   assert.match(await host.drain(),/E_PANIC: guest trap/);
   host.close();
 });
