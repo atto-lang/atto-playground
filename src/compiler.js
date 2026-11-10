@@ -1,4 +1,4 @@
-/** Browser bridge for compiler ABI v2 (atto-source.rs). No JS source evaluator or transpiler. */
+/** ABI v2 bridge for oreslang-source.rs/browser. Wasm + typed-IR ESM targets. */
 export const COMPILER_ABI = 2;
 const MAX_GUEST_BYTES = 1 << 20;
 const encoder = new TextEncoder();
@@ -32,7 +32,9 @@ export async function createCompiler(compilerBytes) {
   // instance that trapped once is never used again.
   let poisoned = null;
   return {
-    compile(source) {
+    compile(source, target = 'wasm') {
+      if (!['wasm', 'javascript'].includes(target)) throw new TypeError('unsupported compiler target');
+      if (target === 'javascript' && typeof api.compile_js !== 'function') throw new Error('Compiler has no JavaScript emitter');
       if (poisoned) throw new Error(`Compiler instance unusable after an internal fault (${poisoned})`);
       if (typeof source !== 'string') throw new TypeError('source must be a string');
       const bytes = encoder.encode(source);
@@ -43,7 +45,7 @@ export async function createCompiler(compilerBytes) {
       if (pointer < 0 || pointer + bytes.length >= api.memory.buffer.byteLength) throw new Error('Compiler input memory bounds violated');
       new Uint8Array(api.memory.buffer, pointer, bytes.length).set(bytes);
       let status;
-      try { status = api.compile(bytes.length); }
+      try { status = (target === 'javascript' ? api.compile_js : api.compile)(bytes.length); }
       catch (error) { poisoned = error.message; throw new Error(`Compiler internal fault: ${error.message}`); }
       if (status !== 0) {
         const diagnostic = {
@@ -60,6 +62,7 @@ export async function createCompiler(compilerBytes) {
         throw new Error('Compiler output memory bounds violated');
       }
       const wasm = new Uint8Array(api.memory.buffer, outPtr, length).slice();
+      if (target === 'javascript') return { ok: true, esm: decoder.decode(wasm), diagnostics: [] };
       if (!WebAssembly.validate(wasm)) throw new Error('Compiler emitted invalid WebAssembly');
       return { ok: true, wasm, diagnostics: [] };
     }

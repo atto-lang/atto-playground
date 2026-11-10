@@ -1,19 +1,24 @@
 #!/usr/bin/env sh
-# Rebuild public/atto_compiler.wasm from a clean atto-source.rs checkout and
+# Rebuild public/atto_compiler.wasm from a clean oreslang-source.rs checkout and
 # write public/atto_compiler.receipt.json. The playground never builds the
-# compiler in CI (atto-source.rs is private); CI verifies the receipt digest.
+# compiler in CI (oreslang-source.rs is private); CI verifies the receipt digest.
 #
-# usage: scripts/vendor-compiler.sh /path/to/atto-source.rs
+# usage: scripts/vendor-compiler.sh /path/to/oreslang-source.rs
 set -eu
-src="${1:?usage: vendor-compiler.sh /path/to/atto-source.rs}"
+src="${1:?usage: vendor-compiler.sh /path/to/oreslang-source.rs /path/to/oreslang-source.js}"
+bridge_src="${2:?provide the clean canonical oreslang-source.js checkout}"
 here="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$bridge_src"
+test -z "$(git status --porcelain)" || { echo "oreslang-source.js checkout is dirty" >&2; exit 1; }
+bridge_head="$(git rev-parse HEAD)"
+cp src/canonical-browser-compiler.mjs "$here/src/compiler.js"
 cd "$src"
-test -z "$(git status --porcelain)" || { echo "atto-source.rs checkout is dirty" >&2; exit 1; }
-cargo rustc --locked --release --lib --target wasm32-unknown-unknown --crate-type cdylib -- -C link-arg=--max-memory=67108864
-cp target/wasm32-unknown-unknown/release/atto_compiler.wasm "$here/public/atto_compiler.wasm"
-head="$(git rev-parse HEAD)"; tree="$(git rev-parse 'HEAD^{tree}')"; rustc="$(rustc --version)"
+test -z "$(git status --porcelain)" || { echo "oreslang-source.rs checkout is dirty" >&2; exit 1; }
+RUSTC="$(rustup which --toolchain 1.85.1 rustc)" rustup run 1.85.1 cargo rustc --manifest-path browser/Cargo.toml --locked --release --lib --target wasm32-unknown-unknown --crate-type cdylib -- -C link-arg=--max-memory=67108864
+cp browser/target/wasm32-unknown-unknown/release/atto_compiler.wasm "$here/public/atto_compiler.wasm"
+head="$(git rev-parse HEAD)"; tree="$(git rev-parse 'HEAD^{tree}')"; rustc="$(rustup run 1.85.1 rustc --version)"
 cd "$here"
-HEAD_SHA="$head" TREE_SHA="$tree" RUSTC="$rustc" node --input-type=module <<'JS'
+HEAD_SHA="$head" TREE_SHA="$tree" RUSTC="$rustc" BRIDGE_HEAD="$bridge_head" node --input-type=module <<'JS'
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 const bytes = fs.readFileSync('public/atto_compiler.wasm');
@@ -21,7 +26,13 @@ const module = new WebAssembly.Module(bytes);
 const { exports: api } = new WebAssembly.Instance(module, {});
 const receipt = {
   schema: 'atto.browser.compiler.vendor.v1',
-  source_repository: 'atto-lang/atto-source.rs',
+  source_repository: 'ores-truffle-oreslang/oreslang-source.rs',
+  source_path: 'browser',
+  bridge_source_repository: 'ores-truffle-oreslang/oreslang-source.js',
+  bridge_source_head: process.env.BRIDGE_HEAD,
+  bridge_source_path: 'src/canonical-browser-compiler.mjs',
+  bridge_sha256: crypto.createHash('sha256').update(fs.readFileSync('src/compiler.js')).digest('hex'),
+  output_targets: ['wasm', 'javascript'],
   source_head: process.env.HEAD_SHA,
   source_tree: process.env.TREE_SHA,
   toolchain: process.env.RUSTC,

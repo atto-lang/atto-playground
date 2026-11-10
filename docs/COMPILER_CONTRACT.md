@@ -1,6 +1,6 @@
 # Playground compiler contract (v2)
 
-The playground ships `public/atto_compiler.wasm`. It is built from [atto-lang/atto-source.rs](https://github.com/atto-lang/atto-source.rs) at the commit named in `public/atto_compiler.receipt.json`. It is a real AttoLang-to-WebAssembly compiler that itself runs as WebAssembly:
+The playground ships `public/atto_compiler.wasm`. It is built from [oreslang-source.rs/browser](https://github.com/ores-truffle-oreslang/oreslang-source.rs/pull/52) at the commit named in `public/atto_compiler.receipt.json`. It is a real AttoLang-to-WebAssembly compiler that itself runs as WebAssembly:
 
 - No server compiles user source.
 - No JavaScript evaluates user source.
@@ -10,7 +10,7 @@ The playground ships `public/atto_compiler.wasm`. It is built from [atto-lang/at
 
 `scripts/vendor-compiler.sh` writes the compiler's SHA-256 and size to both the receipt and `src/compiler-pin.js`. The compiler worker fetches `atto_compiler.wasm?sha256=<prefix>`, so a cached copy from an older deploy is never reused. It then hashes the bytes and refuses to run a compiler that does not match the pin. The tests check the pin against the receipt and confirm that a one-bit change is rejected.
 
-A trap inside the compiler instance would leave its state undefined. `createCompiler` therefore refuses further calls on an instance that trapped, and the page uses a fresh compiler worker for every run anyway. The compiler's resource limits are listed in atto-source.rs `README.md` under "Resource limits". Each limit is a diagnostic, never a trap.
+A trap inside the compiler instance would leave its state undefined. `createCompiler` therefore refuses further calls on an instance that trapped, and the page uses a fresh compiler worker for every run anyway. The compiler's resource limits are listed in canonical browser crate `README.md` under "Resource limits". Each limit is a diagnostic, never a trap.
 
 ## Language subset
 
@@ -32,7 +32,7 @@ The compiler adds no syntax of its own:
 | Actors | `define actor Name as … end`: `let` state, `receive(ActorMail<int\|bool> mail): void`, `spawn Name()`, `ref.send(v)` |
 | Enums | `define enum Name as A B end` (the oreslang-source.llvm v1 design spelling; Java does not parse it yet) |
 
-The full rules are in atto-source.rs `README.md`. Each one was checked against the Java reference compiler.
+The full rules are in canonical browser crate `README.md`. Each one was checked against the Java reference compiler.
 
 Anything else is rejected with an `E_*` diagnostic, and a rejected program produces no artifact. That includes:
 
@@ -55,14 +55,14 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 
 ## Guest contract `atto.browser.guest.v2`
 
-- **Exports:** `main: () -> i64` and `panic_code: mut i32` (1 = integer overflow, 2 = division by zero, which is reserved, 3 = object heap exhausted). `memory` is exported only for string literals or classes, and with classes it is a fixed 1 MiB. Programs with actors also export `actor_init` and `actor_receive`, and carry an `atto.actors` custom section of type names.
+- **Exports:** `main: () -> i64` and `panic_code: mut i32` (1 = integer overflow, 2 = division by zero, which is reserved, 3 = object heap exhausted). `memory` is exported for string literals, classes or actors. It is fixed and non-shared, with strings, aligned actor state slots and the object heap in disjoint regions; with classes it is 1 MiB. Programs with actors also export `actor_init` and `actor_receive`, and carry an `atto.actors` custom section of type names.
 - **Imports:** only from module `atto`: `print_i64`, `print_bool`, `print_str` and `print_newline`, plus `actor_spawn` and `actor_send` for programs with actors. `src/guest.js` refuses any other import, validates the actor table, and caps stdout at 64 KiB.
 
 ### Actors in Web Workers
 
 `src/runner-worker.js` runs `main`. When a guest has actors, `src/actor-host.js` grants `actor_spawn` and `actor_send`:
 
-- Each `spawn` starts one dedicated Web Worker (`src/actor-worker.js`) with a private copy of the module. Actor state lives in that instance's globals, so actors share no memory.
+- Each `spawn` starts one dedicated Web Worker (`src/actor-worker.js`) with a private copy of the module. Actor state lives in that instance's fixed private Wasm linear memory, so actors share no memory.
 - `send` posts mail with sequence numbers from 0. The actor worker handles mail strictly in order and reports each completion. The host rejects out-of-order or unexpected replies.
 - Limits: 16 actors per run and 10,000 messages per actor (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`). Actors cannot spawn or send.
 - The run ends when `main` has returned and every mailbox has drained, which matches the Java reference. Output from different actors may interleave in any order.

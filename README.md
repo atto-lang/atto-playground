@@ -2,7 +2,7 @@
 
 A self-hosted, static **Atto source → WebAssembly compiler → WebAssembly guest** demo. Both compiler and generated program execute inside the visitor's browser. No compilation server and no user-code uploads.
 
-The compiler is [atto-lang/atto-source.rs](https://github.com/atto-lang/atto-source.rs), a Rust AttoLang compiler built for `wasm32-unknown-unknown`. It emits real binary Wasm, not a JavaScript simulation. It compiles a subset of AttoLang: functions, recursion, `int`/`bool`, bindings, `if`/`while`/`for`/`loop` and `stdio.println`. Its syntax follows the reference compiler, and everything outside the subset is rejected. See [the contract](docs/COMPILER_CONTRACT.md).
+The compiler is [oreslang-source.rs/browser](https://github.com/ores-truffle-oreslang/oreslang-source.rs/pull/52), a Rust AttoLang compiler built for `wasm32-unknown-unknown`. It emits real binary Wasm, not a JavaScript simulation. It compiles a subset of AttoLang: functions, recursion, `int`/`bool`, bindings, `if`/`while`/`for`/`loop` and `stdio.println`. Its syntax follows the reference compiler, and everything outside the subset is rejected. See [the contract](docs/COMPILER_CONTRACT.md).
 
 ## Verify locally
 
@@ -14,7 +14,7 @@ npm run serve           # http://localhost:8080
 CHROME_BIN=... npm run test:e2e   # 17 real-browser scenarios under /play/
 ```
 
-To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-source.rs`. It rebuilds the wasm and rewrites `public/atto_compiler.receipt.json` with the source head, tree, toolchain and sha256. CI fails if the shipped wasm does not match the receipt.
+To update the compiler, run `npm run vendor:compiler -- /path/to/clean/oreslang-source.rs /path/to/clean/oreslang-source.js`. It rebuilds the wasm and rewrites `public/atto_compiler.receipt.json` with the source head, tree, toolchain and sha256. CI fails if the shipped wasm does not match the receipt.
 
 ## Architecture
 
@@ -32,7 +32,7 @@ Host this directory on any static host, with `.wasm` served as `application/wasm
 
 The full browser E2E suite checks a compiled 42 result, downloaded Wasm execution, stale-artifact invalidation on edits, mutable and immutable examples, syntax diagnostics, runtime traps, source limits, recovery, Unicode share-link reload, stop/restart cancellation, HTML-injection rejection and static-only HTTP traffic. It uses a disposable Chrome profile, an ephemeral DevTools port and a local static server. It is separate from the Node compiler test suite.
 
-Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The current C bootstrap accepts only the documented M0 scalar subset; promotion to canonical Atto frontend and typed IR requires compiler-backed parity evidence and independent review.
+Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The pinned compiler comes from the canonical oreslang-source.rs/browser target. Its Wasm and optional ESM outputs share the parser/checker. Native Rust/Cranelift, Java and LLVM parity remains incomplete; see the canonical integration evidence.
 
 
 ## Browser editor UI
@@ -48,3 +48,11 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+## Canonical compiler integration
+
+The compiler receipt now pins `ores-truffle-oreslang/oreslang-source.rs`, source path `browser`, plus exact commit/tree/toolchain/digest. `vendor:compiler` builds that canonical crate with Rust 1.85.1. `src/compiler.js` is the host-neutral ABI bridge also maintained in oreslang-source.js and oreslang-source.wasm; its optional `compile(source, "javascript")` selects the shared typed-IR ESM emitter. The page continues to execute Wasm by default. The ESM per-tenant Worker actor path is exercised by the canonical compiler’s browser tests; it is not yet a second UI backend selector.
+
+Current Wasm actors still use a dedicated child Worker per actor; their state now resides in fixed private linear memory. Moving the default UI runtime to one tenant Worker/multiple actors and completing native Cranelift/Java/LLVM parity remain open. Source integration does not approve public disclosure or deploy new Pages bytes.
+
+Vendoring also copies the ABI bridge from the clean canonical source.js checkout and records its exact commit/path/SHA-256. The compiler receipt binds both the Rust artifact and the JS host bridge; neither is inferred from a repository name.

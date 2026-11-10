@@ -1,12 +1,21 @@
 {
   "schema": "atto.browser.compiler.vendor.v1",
-  "source_repository": "atto-lang/atto-source.rs",
-  "source_head": "865c835c7f343a2bb00b5b73a6010825f57be794",
-  "source_tree": "6520a246849366dfdeb77eaba24956f56dc18713",
+  "source_repository": "ores-truffle-oreslang/oreslang-source.rs",
+  "source_path": "browser",
+  "bridge_source_repository": "ores-truffle-oreslang/oreslang-source.js",
+  "bridge_source_head": "8e235cece77c46b8107005f74fe8a57c4271b50f",
+  "bridge_source_path": "src/canonical-browser-compiler.mjs",
+  "bridge_sha256": "3454c294d7cb9c8c557723fe6baebdd0c879de4e4df95bcd8747012171f0f6bb",
+  "output_targets": [
+    "wasm",
+    "javascript"
+  ],
+  "source_head": "6c8c16975ab968da43266b21469a8ad7e0af9701",
+  "source_tree": "412d55bb1565d4ad00e001514fb9ef436fc6b905",
   "toolchain": "rustc 1.85.1 (4eb161250 2025-03-15)",
   "target": "wasm32-unknown-unknown",
   "compiler_abi": 2,
   "guest_abi": "atto.browser.guest.v2",
-  "compiler_sha256": "b7c5e86d8b25a67cc1ea3200b08e088c4022b9d9f8599ba7b87b1253f6822860",
-  "compiler_bytes": 253921
+  "compiler_sha256": "1acd37c8f460aba821bfe791d268f37c5fa47599d152b2108cdacb90554ead9b",
+  "compiler_bytes": 274237
 }
