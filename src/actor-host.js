@@ -131,9 +131,14 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout,
   supervision = null, now = Date.now }) {
   if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
-  if (!Array.isArray(names) || names.length === 0 || names.length > MAX_ACTOR_TYPES ||
-      !names.every(name => typeof name === 'string' &&
-        /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name))) {
+  if (!Array.isArray(names) || names.length === 0 || names.length > MAX_ACTOR_TYPES) {
+    throw new Error('actor host needs a valid actor table');
+  }
+  // Validate the same private snapshot that later determines admission and
+  // diagnostic names. Accessor-backed caller arrays can change on each read.
+  const admittedNames = Object.freeze(Array.from(names));
+  if (!admittedNames.every(name => typeof name === 'string' &&
+      /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name))) {
     throw new Error('actor host needs a valid actor table');
   }
   if (!Number.isSafeInteger(initTimeoutMs) || initTimeoutMs <= 0 || typeof setTimer !== 'function' || typeof clearTimer !== 'function') throw new TypeError('invalid actor init timeout configuration');
@@ -146,7 +151,6 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     throw new Error('E_ACTOR_MEMORY_POLICY: guest module exceeds 1 MiB admission limit');
   }
   const admittedWasm = new Uint8Array(wasm);
-  const admittedNames = Object.freeze([...names]);
   const actorMemoryBytesPerInstance = guestMemoryBudgetBytes(admittedWasm);
   const actors = [];
   let actorMemoryBytes = 0, pendingMessages = 0, droppedMessages = 0, restartCount = 0;
