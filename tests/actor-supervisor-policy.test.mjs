@@ -190,3 +190,42 @@ test('supervised panic before drain does not allow host to accept stale handles'
  assert.equal(await host.drain(),null);
  host.close();
 });
+
+test('one-for-all re-fences an already restarting sibling and cancels its stale timer',async()=>{
+ const {host,timers,fire}=setup({strategy:'one-for-all',maxRestarts:3,
+   initialBackoffMs:10,maxBackoffMs:100});
+ host.spawn(0);host.spawn(0);
+ const w0=MockWorker.all[0],w1=MockWorker.all[1];
+ w0.ready();w1.ready();
+ w1.panic();
+ const first=[...timers.values()].find(t=>!t.cancelled&&t.ms===10);
+ assert.ok(first);
+ w0.panic();
+ assert.equal(first.cancelled,true,'first sibling timer must be cancelled');
+ const count=MockWorker.all.length;
+ first.fn();
+ assert.equal(MockWorker.all.length,count,'stale callback must not start a Worker');
+ assert.equal(host.stats.restartPending,2);
+ fire(20);fire(20);
+ MockWorker.all[2].ready();MockWorker.all[3].ready();
+ assert.equal(await host.drain(),null);
+ assert.equal(decodeActorRef(host.currentRef(0)).generation,2);
+ assert.equal(decodeActorRef(host.currentRef(1)).generation,3);
+ assert.equal(host.stats.restartCount,2);
+ assert.deepEqual(MockWorker.all.map(w=>w.terminated),[1,1,0,0]);
+ host.close();
+ assert.deepEqual(MockWorker.all.map(w=>w.terminated),[1,1,1,1]);
+});
+
+test('backwards supervisor clock fails closed instead of resetting intensity',async()=>{
+ const {host,fire,setClock}=setup({maxRestarts:2,windowMs:1_000,
+   initialBackoffMs:10,maxBackoffMs:20});
+ host.spawn(0);MockWorker.all[0].ready();
+ setClock(1_000);MockWorker.all[0].panic();fire(10);
+ MockWorker.all[1].ready();
+ setClock(999);MockWorker.all[1].panic();
+ assert.match(await host.drain(),/E_SUPERVISOR_CLOCK/);
+ assert.equal(host.stats.restartCount,1);
+ assert.equal(host.stats.restartPending,0);
+ host.close();
+});
