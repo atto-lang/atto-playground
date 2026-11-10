@@ -159,7 +159,10 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   let pendingMessages = 0, droppedMessages = 0, restartCount = 0;
   let fault = null, closed = false, draining = false, terminal = false, terminalResult = null;
   const drainWaiters = [];
-  const workerIdentities = new Set();
+  // A Worker object must represent only one actor incarnation for the entire
+  // host lifetime, including after terminate() was requested. Weak ownership
+  // avoids pinning retired Workers in memory just to remember their identity.
+  const workerIdentities = new WeakSet();
   let restartHistory=[], lastSupervisorTime=-1;
   const supervisorEvents=[];
 
@@ -168,8 +171,21 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     supervisorEvents.push(Object.freeze({...event}));
     if(supervisorEvents.length>MAX_SUPERVISOR_EVENTS)supervisorEvents.shift();
   }
-  function cancelRestart(a){
-    if(a.restartTimer!==null){clearTimer(a.restartTimer);a.restartTimer=null;}
+  function clearTimerSafely(token) {
+    if (token === null) return;
+    // Timer callbacks are additionally fenced by state + generation, so a
+    // faulty injected timer adapter cannot defeat logical revocation.
+    try { clearTimer(token); } catch { /* keep cancelling other actors */ }
+  }
+  function cancelInit(a) {
+    const token=a.initTimer;
+    a.initTimer=null;
+    clearTimerSafely(token);
+  }
+  function cancelRestart(a) {
+    const token=a.restartTimer;
+    a.restartTimer=null; // Fence any already-queued callback before cancellation.
+    clearTimerSafely(token);
   }
   function resolve(handle) {
     const decoded = decodeActorRef(handle);
@@ -179,14 +195,20 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     return actor;
   }
   function detach(a) {
-    if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
+    cancelInit(a);
     const worker=a.worker; a.worker=null;
     if(worker){
       // A detached Worker has no acknowledged physical-quiescence barrier.
       retiredActorMemoryBytes+=actorMemoryBytesPerInstance;
-      worker.onmessage=worker.onerror=worker.onmessageerror=null;
-      try{worker.terminate();}catch{}
-      workerIdentities.delete(worker);
+      // Fencing the actor identity above is authoritative. Even if a host
+      // adapter rejects a property setter, still attempt to terminate it,
+      // and never let cleanup of one actor prevent sibling reclamation.
+      for(const key of ['onmessage','onerror','onmessageerror']){
+        try { worker[key]=null; } catch { /* callback generation is fenced */ }
+      }
+      try { worker.terminate(); } catch { /* remain conservatively charged */ }
+      // Do not forget this Worker identity: an adapter cannot reuse a
+      // terminated object for a fresh actor generation.
     }
   }
   function startWorker(a) {
@@ -202,9 +224,14 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       a.initTimer=setTimer(()=>{if(!a.ready&&!closed&&a.generation===generation&&a.worker===worker)fail(a,'E_ACTOR_INIT_TIMEOUT: actor worker did not become ready');},initTimeoutMs);
       worker.postMessage({kind:'init',wasm:new Uint8Array(admittedWasm),type:a.type});
     } catch(error) {
-      if(worker&&ownsWorker){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
-      if(a.worker===worker)a.worker=null;
-      if(a.initTimer!==null){clearTimer(a.initTimer);a.initTimer=null;}
+      if(a.worker===worker)detach(a);
+      else if(worker&&ownsWorker){
+        for(const key of ['onmessage','onerror','onmessageerror']){
+          try { worker[key]=null; } catch {}
+        }
+        try { worker.terminate(); } catch {}
+      }
+      cancelInit(a);
       throw error;
     }
   }
@@ -277,8 +304,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
         reason:target===a?TERMINATION_REASONS.PANIC:TERMINATION_REASONS.SHUTDOWN,
         delayMs:delay,droppedMessages:lost});
       try{
-        let scheduledId=null;
+        let scheduledId=null,armed=false,firedSynchronously=false;
         scheduledId=setTimer(()=>{
+          // Custom timers must not deliver a callback synchronously before
+          // its cancellation identity has been installed.
+          if(!armed){firedSynchronously=true;return;}
           // Cancelled callbacks can still be delivered. They must not clear
           // the timer owned by a newer incarnation of this child.
           if(target.generation!==generation||target.state!=='restarting'||
@@ -293,7 +323,12 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
             terminalFailure(target,'E_SUPERVISOR_RESTART_INIT: replacement failed',TERMINATION_REASONS.INIT_FAILURE);
           }
         },delay);
+        if(scheduledId==null||firedSynchronously){
+          clearTimerSafely(scheduledId);
+          throw new Error('E_SUPERVISOR_TIMER: invalid timer admission');
+        }
         target.restartTimer=scheduledId;
+        armed=true;
       }catch{
         terminalFailure(target,'E_SUPERVISOR_TIMER: cannot schedule replacement',TERMINATION_REASONS.INIT_FAILURE);
         return true;
@@ -351,7 +386,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     } else if (data?.kind === 'ready' && !a.ready) {
       a.ready = true;
       a.state = 'running';
-      if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
+      cancelInit(a);
       check();
     } else {
       fail(a, 'E_ACTOR_PROTOCOL: unexpected actor worker message');
@@ -467,7 +502,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       a.state = 'stopped';
       detach(a);
     }
-    workerIdentities.clear();
+    // The WeakSet is not cleared: no further admissions are possible after close.
     // No further admissions are possible after close; drop logical budget
     // reservations but keep the unverified termination total observable.
     actorMemoryBytes = 0;
