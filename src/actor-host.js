@@ -214,9 +214,14 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
         reason:target===a?TERMINATION_REASONS.PANIC:TERMINATION_REASONS.SHUTDOWN,
         delayMs:delay,droppedMessages:lost});
       try{
-        target.restartTimer=setTimer(()=>{
+        let scheduledId=null;
+        scheduledId=setTimer(()=>{
+          // Cancelled callbacks can still be delivered. They must not clear
+          // the timer owned by a newer incarnation of this child.
+          if(target.generation!==generation||target.state!=='restarting'||
+             target.restartTimer!==scheduledId)return;
           target.restartTimer=null;
-          if(closed||fault||target.generation!==generation||target.state!=='restarting')return;
+          if(closed||fault)return;
           try{
             startWorker(target);
             record({kind:'restart_started',actorId:target.id,generation});
@@ -225,6 +230,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
             terminalFailure(target,'E_SUPERVISOR_RESTART_INIT: replacement failed',TERMINATION_REASONS.INIT_FAILURE);
           }
         },delay);
+        target.restartTimer=scheduledId;
       }catch{
         terminalFailure(target,'E_SUPERVISOR_TIMER: cannot schedule replacement',TERMINATION_REASONS.INIT_FAILURE);
         return true;
