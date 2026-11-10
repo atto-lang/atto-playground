@@ -100,7 +100,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   const actorMemoryBytesPerInstance = guestMemoryBudgetBytes(wasm);
   const actors = [];
   let actorMemoryBytes = 0, pendingMessages = 0;
-  let fault = null, closed = false, terminal = false, terminalResult = null;
+  let fault = null, closed = false, draining = false, terminal = false, terminalResult = null;
   const drainWaiters = [];
   const workerIdentities = new Set();
 
@@ -137,7 +137,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     }
   }
   function fail(a, message) {
-    if (fault) return;
+    if (fault || closed) return;
+    if (a) a.state = 'failed';
     fault = `${message} in actor ${label(a)}`;
     check();
   }
@@ -158,11 +159,15 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function onMessage(a, data, generation = a.generation, worker = a.worker) {
     if (a.generation !== generation || a.worker !== worker) return;
     if (closed || fault) return;
-    if (typeof data?.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
-    if (data?.truncated) out.truncated = true;
     if (data?.kind === 'fault') {
+      // Preserve output produced before a genuine guest trap, but never
+      // credit output from a malformed ready/done response.
+      if (typeof data.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
+      if (data.truncated) out.truncated = true;
       fail(a, typeof data.message === 'string' && /^E_[A-Z_]+: /.test(data.message) ? data.message : 'E_ACTOR: worker fault');
     } else if (data?.kind === 'done' && a.ready && data.sequence === a.done && a.done < a.sent) {
+      if (typeof data.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
+      if (data.truncated) out.truncated = true;
       a.done++;
       pendingMessages--;
       check();
@@ -178,6 +183,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function spawn(type) {
     if(closed)throw new Error('E_ACTOR: actor host closed');
+    if(fault)throw new Error('E_ACTOR_FAILED: actor host has failed');
+    if(draining)throw new Error('E_ACTOR_FINALIZED: actor host is draining');
     if(!Number.isInteger(type)||type<0||type>=names.length)throw new Error('E_ACTOR: unknown actor type');
     if(actors.length>=MAX_ACTORS)throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     if(actorMemoryBytes+actorMemoryBytesPerInstance>MAX_TOTAL_ACTOR_MEMORY_BYTES)throw new Error('E_ACTOR_TOTAL_MEMORY: aggregate actor memory budget exceeded');
@@ -190,7 +197,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function restart(handle) {
     if(closed)throw new Error('E_ACTOR: actor host closed');
-    if(terminal)throw new Error('E_ACTOR_RESTART_CLOSED: actor host has already drained');
+    if(fault)throw new Error('E_ACTOR_FAILED: actor host has failed');
+    if(draining || terminal)throw new Error('E_ACTOR_RESTART_CLOSED: actor host is draining or has already drained');
     const a=resolve(handle);
     if(a.state!=='running'||!a.ready||a.done!==a.sent)throw new Error('E_ACTOR_RESTART_BUSY: actor must be ready with an empty mailbox');
     if(a.generation>=MAX_ACTOR_GENERATION){a.state='failed';fail(a,'E_ACTOR_GENERATION_EXHAUSTED');detach(a);throw new Error('E_ACTOR_GENERATION_EXHAUSTED: actor generation cannot wrap');}
@@ -201,6 +209,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
+    if (fault) throw new Error('E_ACTOR_FAILED: actor host has failed');
+    if (draining) throw new Error('E_ACTOR_FINALIZED: actor host is draining');
     const a = resolve(ref);
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
@@ -219,6 +229,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
    *  fault message. Mail can arrive only from main, so after main returns the
    *  set of messages is final. */
   function drain() {
+    draining = true;
     if (terminal) return Promise.resolve(terminalResult);
     return new Promise(resolve => { drainWaiters.push(resolve); check(); });
   }
