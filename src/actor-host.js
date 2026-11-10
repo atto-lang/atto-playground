@@ -169,11 +169,74 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       throw error;
     }
   }
-  function fail(a, message) {
-    if (fault || closed) return;
-    if (a) a.state = 'failed';
-    fault = `${message} in actor ${label(a)}`;
+  function terminalFailure(a,message,reason=TERMINATION_REASONS.PROTOCOL){
+    if(fault||closed)return;
+    if(a){
+      a.state='failed';cancelRestart(a);
+      record({kind:'terminal',actorId:a.id,generation:a.generation,reason,message});
+    }
+    fault=`${message} in actor ${label(a)}`;
     check();
+  }
+  function recover(a,message){
+    // A malformed actor protocol or startup error is never auto-restarted:
+    // only a well-formed terminal E_PANIC issued by a current Worker qualifies.
+    if(!supervisor||!message.startsWith('E_PANIC: '))return false;
+    if(supervisor.policy===RESTART_POLICIES.TEMPORARY)return false;
+    const time=now();
+    if(!Number.isSafeInteger(time)||time<0){
+      terminalFailure(a,'E_SUPERVISOR_CLOCK: invalid clock',TERMINATION_REASONS.PROTOCOL);
+      return true;
+    }
+    restartHistory=restartHistory.filter(t=>t>time-supervisor.windowMs && t<=time);
+    if(restartHistory.length>=supervisor.maxRestarts){
+      terminalFailure(a,'E_SUPERVISOR_RESTART_LIMIT: restart intensity exceeded',TERMINATION_REASONS.RESTART_LIMIT);
+      return true;
+    }
+    const targets=supervisor.strategy===RESTART_STRATEGIES.ONE_FOR_ALL?
+      actors.filter(x=>x===a||x.state==='starting'||x.state==='running'):[a];
+    if(targets.some(x=>x.generation>=MAX_ACTOR_GENERATION)){
+      terminalFailure(a,'E_ACTOR_GENERATION_EXHAUSTED: generation cannot wrap',TERMINATION_REASONS.RESTART_LIMIT);
+      return true;
+    }
+    restartHistory.push(time);restartCount++;
+    const delay=Math.min(supervisor.maxBackoffMs,
+      supervisor.initialBackoffMs*2**Math.min(30,restartHistory.length-1));
+    for(const target of targets){
+      const lost=target.sent-target.done;
+      pendingMessages-=lost;droppedMessages+=lost;
+      cancelRestart(target);target.state='restarting';
+      detach(target);target.generation++;target.ready=false;
+      target.sent=0;target.done=0;
+      const generation=target.generation;
+      record({kind:'restart_scheduled',actorId:target.id,generation,
+        reason:target===a?TERMINATION_REASONS.PANIC:TERMINATION_REASONS.SHUTDOWN,
+        delayMs:delay,droppedMessages:lost});
+      try{
+        target.restartTimer=setTimer(()=>{
+          target.restartTimer=null;
+          if(closed||fault||target.generation!==generation||target.state!=='restarting')return;
+          try{
+            startWorker(target);
+            record({kind:'restart_started',actorId:target.id,generation});
+            check();
+          }catch{
+            terminalFailure(target,'E_SUPERVISOR_RESTART_INIT: replacement failed',TERMINATION_REASONS.INIT_FAILURE);
+          }
+        },delay);
+      }catch{
+        terminalFailure(target,'E_SUPERVISOR_TIMER: cannot schedule replacement',TERMINATION_REASONS.INIT_FAILURE);
+        return true;
+      }
+    }
+    check();
+    return true;
+  }
+  function fail(a,message){
+    if(fault||closed)return;
+    if(a&&recover(a,message))return;
+    terminalFailure(a,message,message.startsWith('E_PANIC: ')?
+      TERMINATION_REASONS.PANIC:TERMINATION_REASONS.PROTOCOL);
   }
   function check() {
     if (!drainWaiters.length) return;
@@ -182,7 +245,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       for (const resolve of waiters) resolve(terminalResult);
       return;
     }
-    if (fault || closed || actors.every(a => a.ready && a.done === a.sent)) {
+    if (fault || closed || actors.every(a => a.state==='stopped' || (a.ready && a.done === a.sent))) {
       terminalResult = fault || (closed ? 'E_ACTOR_CANCELLED: actor host closed' : null);
       terminal = true;
       const waiters = drainWaiters.splice(0);
