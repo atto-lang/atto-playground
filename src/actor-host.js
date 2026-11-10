@@ -303,9 +303,38 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     catch(error){a.state='failed';fail(a,'E_ACTOR_RESTART: worker restart failed');throw error;}
   }
 
+  /** Supervisor/host-only stop: invalidate handle, detach child, reclaim its
+   * reservation, and explicitly count discarded in-flight messages. */
+  function stop(handle) {
+    if(closed)throw new Error('E_ACTOR: actor host closed');
+    const a=resolve(handle);
+    if(fault)throw new Error('E_ACTOR_FAILED: actor host has failed');
+    if(draining)throw new Error('E_ACTOR_FINALIZED: actor host is draining');
+    cancelRestart(a);
+    const lost=a.sent-a.done;
+    pendingMessages-=lost;droppedMessages+=lost;
+    a.state='stopped';detach(a);
+    actorMemoryBytes-=actorMemoryBytesPerInstance;
+    record({kind:'stopped',actorId:a.id,generation:a.generation,
+      reason:TERMINATION_REASONS.NORMAL,droppedMessages:lost});
+    check();
+  }
+  /** Host-only identity lookup after automatic recovery. Never exported as
+   * a Wasm capability or exposed across tenant/run boundaries. */
+  function currentRef(id) {
+    if(!supervisor)throw new Error('E_SUPERVISOR_DISABLED: currentRef is supervisor-only');
+    if(!Number.isInteger(id)||id<0||id>=actors.length)
+      throw new Error('E_ACTOR_REF_STALE: invalid actor reference (expired or stale)');
+    const a=actors[id], handle=encodeActorRef(a.id,a.generation);
+    resolve(handle);
+    return handle;
+  }
+
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
     const a = resolve(ref);
+    if(a.state==='restarting'||a.state==='stopping')
+      throw new Error('E_ACTOR_NOT_READY: actor is restarting');
     if (fault) throw new Error('E_ACTOR_FAILED: actor host has failed');
     if (draining) throw new Error('E_ACTOR_FINALIZED: actor host is draining');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
@@ -337,6 +366,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!terminal && !fault) fault = 'E_ACTOR_CANCELLED: actor host closed';
     check(); // settle every pending drain; never leave a cancelled run hanging
     for (const a of actors) {
+      cancelRestart(a);
       a.state = 'stopped';
       detach(a);
     }
@@ -345,8 +375,13 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     pendingMessages = 0;
   }
 
-  return { spawn, send, restart, drain, close,
+  return { spawn, send, restart, stop, currentRef, drain, close,
     get count() { return actors.length; },
-    get stats() { return Object.freeze({ actors: actors.length, actorMemoryBytes, pendingMessages, maxActorMemoryBytes: MAX_TOTAL_ACTOR_MEMORY_BYTES, maxPendingMessages: MAX_TOTAL_PENDING_MESSAGES }); }
+    get events() { return Object.freeze([...supervisorEvents]); },
+    get stats() { return Object.freeze({ actors: actors.length, actorMemoryBytes,
+      pendingMessages,droppedMessages,restartCount,
+      restartPending:actors.filter(a=>a.restartTimer!==null).length,
+      maxActorMemoryBytes: MAX_TOTAL_ACTOR_MEMORY_BYTES,
+      maxPendingMessages: MAX_TOTAL_PENDING_MESSAGES }); }
   };
 }
