@@ -127,7 +127,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   let fault = null, closed = false, draining = false, terminal = false, terminalResult = null;
   const drainWaiters = [];
   const workerIdentities = new Set();
-  let restartHistory=[];
+  let restartHistory=[], lastSupervisorTime=-1;
   const supervisorEvents=[];
 
   const label = a => `${a.name}#${a.id}`;
@@ -184,17 +184,18 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if(!supervisor||!message.startsWith('E_PANIC: '))return false;
     if(supervisor.policy===RESTART_POLICIES.TEMPORARY)return false;
     const time=now();
-    if(!Number.isSafeInteger(time)||time<0){
+    if(!Number.isSafeInteger(time)||time<0||time<lastSupervisorTime){
       terminalFailure(a,'E_SUPERVISOR_CLOCK: invalid clock',TERMINATION_REASONS.PROTOCOL);
       return true;
     }
+    lastSupervisorTime=time;
     restartHistory=restartHistory.filter(t=>t>time-supervisor.windowMs && t<=time);
     if(restartHistory.length>=supervisor.maxRestarts){
       terminalFailure(a,'E_SUPERVISOR_RESTART_LIMIT: restart intensity exceeded',TERMINATION_REASONS.RESTART_LIMIT);
       return true;
     }
     const targets=supervisor.strategy===RESTART_STRATEGIES.ONE_FOR_ALL?
-      actors.filter(x=>x===a||x.state==='starting'||x.state==='running'):[a];
+      actors.filter(x=>x===a||x.state==='starting'||x.state==='running'||x.state==='restarting'):[a];
     if(targets.some(x=>x.generation>=MAX_ACTOR_GENERATION)){
       terminalFailure(a,'E_ACTOR_GENERATION_EXHAUSTED: generation cannot wrap',TERMINATION_REASONS.RESTART_LIMIT);
       return true;
