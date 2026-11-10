@@ -154,7 +154,9 @@ test('actor quota snapshot defeats mutation of caller-owned Wasm before spawn an
   const next=host.restart(refs[0]);
   assert.notEqual(next,refs[0]);
   assert.equal(ManualWorker.instances[16].messages[0].wasm[12],1,'restart uses the same admission snapshot');
-  assert.equal(host.stats.actorMemoryBytes,16*65_536);
+  assert.equal(host.stats.actorMemoryBytes,17*65_536,
+    'restarted actor must reserve its replacement in addition to retiring memory');
+  assert.equal(host.stats.retiredActorMemoryBytes,65_536);
   host.close();
   assert.equal(host.stats.actorMemoryBytes,0);
 });
@@ -230,7 +232,7 @@ test('manual restart requires headroom for retiring and new Wasm instances',()=>
   assert.doesNotThrow(()=>host.send(first,3n));
   assert.equal(ManualWorker.instances.length,8);
   host.close();
-  assert.equal(host.stats.retiredActorMemoryBytes,9*1_048_576);
+  assert.equal(host.stats.retiredActorMemoryBytes,8*1_048_576);
 });
 
 test('supervisor refuses restart without headroom before detaching other children',async()=>{
