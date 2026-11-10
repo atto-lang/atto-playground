@@ -390,8 +390,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     catch(error){a.state='failed';fail(a,'E_ACTOR_RESTART: worker restart failed');throw error;}
   }
 
-  /** Supervisor/host-only stop: invalidate handle, detach child, reclaim its
-   * reservation, and explicitly count discarded in-flight messages. */
+  /** Supervisor/host-only stop: invalidate the handle, detach the Worker,
+   * retain its unverified memory reservation, and account for dropped mail. */
   function stop(handle) {
     if(closed)throw new Error('E_ACTOR: actor host closed');
     const a=resolve(handle);
