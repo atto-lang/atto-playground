@@ -193,3 +193,93 @@ test('actor name accessors are read once and the exact admitted copy is validate
   const sparse=new Array(1);
   assert.throws(()=>hostFor(module,{names:sparse}),/valid actor table/);
 });
+
+test('stop does not recycle unacknowledged Worker memory quota in the same run',()=>{
+  const host=hostFor(memoryModule(1,16,16));
+  const refs=Array.from({length:8},()=>host.spawn(0));
+  assert.equal(host.stats.actorMemoryBytes,MAX_TOTAL_ACTOR_MEMORY_BYTES);
+  ManualWorker.instances[0].ready();
+  host.stop(refs[0]);
+  assert.equal(ManualWorker.instances[0].terminated,1);
+  assert.equal(host.stats.retiredActorMemoryBytes,1_048_576);
+  assert.equal(host.stats.physicalReclamationVerified,false);
+  assert.equal(host.stats.actorMemoryBytes,MAX_TOTAL_ACTOR_MEMORY_BYTES,
+    'stopping is not evidence of physical memory reclamation');
+  const created=ManualWorker.instances.length;
+  assert.throws(()=>host.spawn(0),/E_ACTOR_TOTAL_MEMORY/);
+  assert.equal(ManualWorker.instances.length,created,
+    'a new Worker must not be admitted using unverified retired memory');
+  host.close();
+  assert.equal(host.stats.actorMemoryBytes,0);
+  assert.equal(host.stats.retiredActorMemoryBytes,MAX_TOTAL_ACTOR_MEMORY_BYTES);
+});
+
+test('manual restart requires headroom for retiring and new Wasm instances',()=>{
+  const host=hostFor(memoryModule(1,16,16));
+  const refs=Array.from({length:7},()=>host.spawn(0));
+  ManualWorker.instances[0].ready();
+  const first=host.restart(refs[0]);
+  assert.notEqual(first,refs[0]);
+  assert.equal(host.stats.actorMemoryBytes,MAX_TOTAL_ACTOR_MEMORY_BYTES);
+  assert.equal(host.stats.retiredActorMemoryBytes,1_048_576);
+  assert.equal(ManualWorker.instances[0].terminated,1);
+  ManualWorker.instances[7].ready();
+  assert.throws(()=>host.restart(first),/E_ACTOR_RECLAIM_BUDGET/);
+  assert.equal(ManualWorker.instances[7].terminated,0,
+    'rejected restart must keep the healthy actor running');
+  assert.doesNotThrow(()=>host.send(first,3n));
+  assert.equal(ManualWorker.instances.length,8);
+  host.close();
+  assert.equal(host.stats.retiredActorMemoryBytes,9*1_048_576);
+});
+
+test('supervisor refuses restart without headroom before detaching other children',async()=>{
+  const host=hostFor(memoryModule(1,16,16),{
+    supervision:{strategy:'one-for-one',maxRestarts:2}
+  });
+  const refs=Array.from({length:8},()=>host.spawn(0));
+  for(const w of ManualWorker.instances)w.ready();
+  host.send(refs[0],1n);
+  ManualWorker.instances[0].onmessage({data:{
+    kind:'fault',message:'E_PANIC: guest trap',stdout:'',truncated:false
+  }});
+  const failure=await host.drain();
+  assert.match(failure,/E_ACTOR_RECLAIM_BUDGET/);
+  assert.equal(host.stats.restartCount,0);
+  assert.equal(host.stats.restartPending,0);
+  assert.equal(ManualWorker.instances.length,8);
+  assert.equal(host.stats.actorMemoryBytes,MAX_TOTAL_ACTOR_MEMORY_BYTES);
+  assert.ok(ManualWorker.instances.every(w=>w.terminated===1),
+    'terminal budget failure fences every child Worker');
+  host.close();
+});
+
+test('one-for-all pending replacements consume only their existing reservations',()=>{
+  let id=0;const restartCallbacks=[];
+  const host=hostFor(memoryModule(1,16,16),{
+    supervision:{strategy:'one-for-all',maxRestarts:3,initialBackoffMs:10,maxBackoffMs:20},
+    setTimer:(fn,ms)=>{
+      const key=++id;
+      if(ms===10||ms===20)restartCallbacks.push({key,fn,ms});
+      return key;
+    },
+    clearTimer:()=>{},
+    now:()=>100
+  });
+  const a=host.spawn(0),b=host.spawn(0);
+  const [first,second]=ManualWorker.instances;first.ready();second.ready();
+  host.send(a,1n);first.onmessage({data:{kind:'fault',message:'E_PANIC: guest trap'}});
+  assert.equal(host.stats.actorMemoryBytes,4*1_048_576);
+  assert.equal(host.stats.restartPending,2);
+  const scheduled0=restartCallbacks[0];
+  scheduled0.fn();
+  const newFirst=ManualWorker.instances[2];
+  newFirst.ready();
+  host.send(host.currentRef(0),2n);
+  newFirst.onmessage({data:{kind:'fault',message:'E_PANIC: guest trap'}});
+  assert.equal(host.stats.actorMemoryBytes,5*1_048_576,
+    'the sibling waiting in backoff already owns its next-instance reservation');
+  assert.equal(host.stats.retiredActorMemoryBytes,3*1_048_576);
+  assert.equal(host.stats.restartPending,2);
+  host.close();
+});
