@@ -197,9 +197,9 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function restart(handle) {
     if(closed)throw new Error('E_ACTOR: actor host closed');
+    const a=resolve(handle);
     if(fault)throw new Error('E_ACTOR_FAILED: actor host has failed');
     if(draining || terminal)throw new Error('E_ACTOR_RESTART_CLOSED: actor host is draining or has already drained');
-    const a=resolve(handle);
     if(a.state!=='running'||!a.ready||a.done!==a.sent)throw new Error('E_ACTOR_RESTART_BUSY: actor must be ready with an empty mailbox');
     if(a.generation>=MAX_ACTOR_GENERATION){a.state='failed';fail(a,'E_ACTOR_GENERATION_EXHAUSTED');detach(a);throw new Error('E_ACTOR_GENERATION_EXHAUSTED: actor generation cannot wrap');}
     a.state='stopping';detach(a);a.generation++;a.sent=0;a.done=0;
@@ -209,9 +209,9 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
+    const a = resolve(ref);
     if (fault) throw new Error('E_ACTOR_FAILED: actor host has failed');
     if (draining) throw new Error('E_ACTOR_FINALIZED: actor host is draining');
-    const a = resolve(ref);
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     if (pendingMessages >= MAX_TOTAL_PENDING_MESSAGES) throw new Error('E_ACTOR_TOTAL_MAILBOX: aggregate pending-message budget exceeded');
