@@ -176,6 +176,14 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       record({kind:'terminal',actorId:a.id,generation:a.generation,reason,message});
     }
     fault=`${message} in actor ${label(a)}`;
+    // A terminal supervisor failure is a whole-host shutdown boundary.
+    // Stop siblings and cancel all outstanding restart timers immediately,
+    // not only when a caller eventually invokes close(). Retain conservative
+    // mail accounting until close(), so failed/undelivered work is visible.
+    for(const child of actors) {
+      cancelRestart(child);
+      detach(child);
+    }
     check();
   }
   function recover(a,message){
@@ -183,7 +191,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     // only a well-formed terminal E_PANIC issued by a current Worker qualifies.
     if(!supervisor||!message.startsWith('E_PANIC: '))return false;
     if(supervisor.policy===RESTART_POLICIES.TEMPORARY)return false;
-    const time=now();
+    let time;
+    try { time=now(); } catch {
+      terminalFailure(a,'E_SUPERVISOR_CLOCK: clock failed',TERMINATION_REASONS.PROTOCOL);
+      return true;
+    }
     if(!Number.isSafeInteger(time)||time<0||time<lastSupervisorTime){
       terminalFailure(a,'E_SUPERVISOR_CLOCK: invalid clock',TERMINATION_REASONS.PROTOCOL);
       return true;
@@ -263,6 +275,17 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (a.generation !== generation || a.worker !== worker) return;
     if (closed || fault) return;
     if (data?.kind === 'fault') {
+      // Automatic recovery is only authorized for a panic while a ready
+      // actor has accepted (and not acknowledged) mail. A forged panic
+      // before ready or with no admitted work is a protocol violation.
+      // Do not credit its stdout or consume a supervisor restart permit.
+      if (supervisor && typeof data.message === 'string' &&
+          data.message.startsWith('E_PANIC: ') &&
+          (!a.ready || a.done >= a.sent)) {
+        terminalFailure(a,'E_ACTOR_PROTOCOL: unsolicited actor panic',
+          TERMINATION_REASONS.PROTOCOL);
+        return;
+      }
       // Preserve output produced before a genuine guest trap, but never
       // credit output from a malformed ready/done response.
       if (typeof data.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
@@ -368,11 +391,20 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function close() {
     if (closed) return;
+    const normalCompletion = terminal && terminalResult === null;
+    const shutdownReason = normalCompletion ? TERMINATION_REASONS.NORMAL :
+      fault ? TERMINATION_REASONS.SHUTDOWN : TERMINATION_REASONS.CANCELLED;
     closed = true;
     // Preserve a completed successful drain; only cancel work that is still pending.
     if (!terminal && !fault) fault = 'E_ACTOR_CANCELLED: actor host closed';
     check(); // settle every pending drain; never leave a cancelled run hanging
     for (const a of actors) {
+      if(a.state !== 'stopped') {
+        const lost=a.sent-a.done;
+        droppedMessages+=lost;
+        record({kind:'stopped',actorId:a.id,generation:a.generation,
+          reason:shutdownReason,droppedMessages:lost});
+      }
       cancelRestart(a);
       a.state = 'stopped';
       detach(a);
