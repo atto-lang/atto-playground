@@ -181,7 +181,13 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function detach(a) {
     if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
     const worker=a.worker; a.worker=null;
-    if(worker){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
+    if(worker){
+      // A detached Worker has no acknowledged physical-quiescence barrier.
+      retiredActorMemoryBytes+=actorMemoryBytesPerInstance;
+      worker.onmessage=worker.onerror=worker.onmessageerror=null;
+      try{worker.terminate();}catch{}
+      workerIdentities.delete(worker);
+    }
   }
   function startWorker(a) {
     let worker=null, ownsWorker=false;
@@ -263,7 +269,6 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       cancelRestart(target);target.state='restarting';
       if(target.worker!==null){
         actorMemoryBytes+=actorMemoryBytesPerInstance;
-        retiredActorMemoryBytes+=actorMemoryBytesPerInstance;
       }
       detach(target);target.generation++;target.ready=false;
       target.sent=0;target.done=0;
@@ -380,7 +385,6 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     // The retiring Worker and the replacement must both be budgeted until
     // there is an independently verified backend-specific reclaim barrier.
     actorMemoryBytes+=actorMemoryBytesPerInstance;
-    retiredActorMemoryBytes+=actorMemoryBytesPerInstance;
     a.state='stopping';detach(a);a.generation++;a.sent=0;a.done=0;
     try{startWorker(a);return encodeActorRef(a.id,a.generation);}
     catch(error){a.state='failed';fail(a,'E_ACTOR_RESTART: worker restart failed');throw error;}
@@ -396,7 +400,6 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     cancelRestart(a);
     const lost=a.sent-a.done;
     pendingMessages-=lost;droppedMessages+=lost;
-    if(a.worker!==null)retiredActorMemoryBytes+=actorMemoryBytesPerInstance;
     a.state='stopped';detach(a);
     // No immediate refund: termination is requested but physical reclamation
     // is unverified. Slot admission uses actorMemoryBytes until close().
@@ -461,7 +464,6 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
           reason:shutdownReason,droppedMessages:lost});
       }
       cancelRestart(a);
-      if(a.worker!==null)retiredActorMemoryBytes+=actorMemoryBytesPerInstance;
       a.state = 'stopped';
       detach(a);
     }
