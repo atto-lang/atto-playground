@@ -6,7 +6,7 @@
   <meta name="description" content="Write AttoLang and compile to WebAssembly locally in your browser.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; connect-src 'self'; worker-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; object-src 'none'">
   <meta name="theme-color" content="#0b1020">
-  <title>AttoLang Playground · Source → Wasm</title>
+  <title>AttoLang Playground · Source → Wasm / JavaScript</title>
   <link rel="stylesheet" href="./styles.css">
   <script type="module" src="./src/app.js"></script>
 </head>
@@ -20,7 +20,7 @@
     <div class="intro">
       <div class="eyebrow"><span class="pulse"></span> WASM-NATIVE · SERVERLESS</div>
       <h1>Write Atto. <em>Run anywhere.</em></h1>
-      <p>A real Atto compiler and the canonical Rust formatter run locally in your browser using WebAssembly. Your code compiles into executable Wasm without a compilation server.</p>
+      <p>A real Atto compiler and the canonical Rust formatter run locally in your browser using WebAssembly. Choose WebAssembly or JavaScript output from the same compiler. Your code stays in this browser.</p>
     </div>
     <section class="workbench" aria-label="AttoLang compiler playground">
       <div class="pane editor-pane">
@@ -34,8 +34,8 @@
       </div>
       <div class="pane result-pane">
         <div class="pane-header"><span class="filename">Output</span><span id="summary" data-kind="neutral">Ready</span></div>
-        <div class="output-tabs" role="tablist" aria-label="Output views"><button type="button" role="tab" id="tab-console" data-tab="console" aria-controls="panel-console" aria-selected="true" tabindex="0">Console</button><button type="button" role="tab" id="tab-diagnostics" data-tab="diagnostics" aria-controls="panel-diagnostics" aria-selected="false" tabindex="-1">Diagnostics</button><button type="button" role="tab" id="tab-wasm" data-tab="wasm" aria-controls="panel-wasm" aria-selected="false" tabindex="-1">Wasm</button></div><div class="console tab-panel" id="panel-console" role="tabpanel" aria-labelledby="tab-console"><div class="console-label">COMPILE &amp; RUN</div><pre id="output" aria-live="polite">Ready to compile.</pre></div><div class="console tab-panel" id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" hidden><div class="console-label">COMPILER DIAGNOSTICS · SELECT AN ERROR TO JUMP TO SOURCE</div><div id="diagnostics" aria-live="polite">No diagnostics.</div></div><div class="console tab-panel" id="panel-wasm" role="tabpanel" aria-labelledby="tab-wasm" hidden><div class="console-label">GENERATED WEBASSEMBLY</div><pre id="wasm-preview">No compiled artifact yet.</pre></div>
-        <div class="info"><span>Target <strong>wasm32-browser</strong></span><span>Artifact <strong id="bytes">—</strong></span></div>
+        <div class="output-tabs" role="tablist" aria-label="Output views"><button type="button" role="tab" id="tab-console" data-tab="console" aria-controls="panel-console" aria-selected="true" tabindex="0">Console</button><button type="button" role="tab" id="tab-diagnostics" data-tab="diagnostics" aria-controls="panel-diagnostics" aria-selected="false" tabindex="-1">Diagnostics</button><button type="button" role="tab" id="tab-wasm" data-tab="wasm" aria-controls="panel-wasm" aria-selected="false" tabindex="-1">Wasm</button></div><div class="console tab-panel" id="panel-console" role="tabpanel" aria-labelledby="tab-console"><div class="console-label">COMPILE &amp; RUN</div><pre id="output" aria-live="polite">Ready to compile.</pre></div><div class="console tab-panel" id="panel-diagnostics" role="tabpanel" aria-labelledby="tab-diagnostics" hidden><div class="console-label">COMPILER DIAGNOSTICS · SELECT AN ERROR TO JUMP TO SOURCE</div><div id="diagnostics" aria-live="polite">No diagnostics.</div></div><div class="console tab-panel" id="panel-wasm" role="tabpanel" aria-labelledby="tab-wasm" hidden><div class="console-label" id="artifact-label">GENERATED WEBASSEMBLY</div><pre id="wasm-preview">No compiled artifact yet.</pre></div>
+        <div class="info"><label for="backend">Run with <select id="backend"><option value="wasm">WebAssembly</option><option value="javascript">JavaScript</option></select></label><span>Artifact <strong id="bytes">—</strong></span></div>
         <div class="controls"><button class="primary" id="run" type="button">▶ Run program</button><button id="format" type="button" title="Canonical Rust formatter (Alt+Shift+F)">Format</button><button id="check-format" type="button" title="Check formatting without editing code">Check format</button><button id="stop" type="button" disabled>Stop</button><button id="download" type="button" disabled>↓ Wasm</button><button id="share" type="button">Share ↗</button></div>
       </div>
     </section>

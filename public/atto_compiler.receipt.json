@@ -1,12 +1,27 @@
 {
   "schema": "atto.browser.compiler.vendor.v1",
-  "source_repository": "atto-lang/atto-source.rs",
-  "source_head": "865c835c7f343a2bb00b5b73a6010825f57be794",
-  "source_tree": "6520a246849366dfdeb77eaba24956f56dc18713",
+  "source_repository": "ores-truffle-oreslang/oreslang-source.rs",
+  "source_path": "browser",
+  "bridge_source_repository": "ores-truffle-oreslang/oreslang-source.js",
+  "bridge_source_head": "55538c49c5b221d57c492667b631d21b5f623f49",
+  "bridge_source_path": "src/canonical-browser-compiler.mjs",
+  "bridge_sha256": "3454c294d7cb9c8c557723fe6baebdd0c879de4e4df95bcd8747012171f0f6bb",
+  "runtime_source_repository": "ores-truffle-oreslang/oreslang-source.js",
+  "runtime_source_head": "55538c49c5b221d57c492667b631d21b5f623f49",
+  "runtime_files": {
+    "src/canonical-actor-runtime.mjs": "3c8e2359cc10b380f244f32fa336b9f7d157164f018660d35e93bbc4c1a699a8",
+    "src/tenant-turn-queue.mjs": "85a9b13ea8eddcd62fefb08dd9fafa91ac770ba7f0c03b09580377b5762c0324"
+  },
+  "output_targets": [
+    "wasm",
+    "javascript"
+  ],
+  "source_head": "9b40edd07e78c69f541408ad41d7349f34725f1c",
+  "source_tree": "3937d26010d59d0648afe601c035afa7455557a2",
   "toolchain": "rustc 1.85.1 (4eb161250 2025-03-15)",
   "target": "wasm32-unknown-unknown",
   "compiler_abi": 2,
   "guest_abi": "atto.browser.guest.v2",
-  "compiler_sha256": "b7c5e86d8b25a67cc1ea3200b08e088c4022b9d9f8599ba7b87b1253f6822860",
-  "compiler_bytes": 253921
+  "compiler_sha256": "1acd37c8f460aba821bfe791d268f37c5fa47599d152b2108cdacb90554ead9b",
+  "compiler_bytes": 274237
 }

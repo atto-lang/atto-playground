@@ -1,3 +1,4 @@
+import { createTenantPool } from './tenant-pool.js';
 import { createWorkerTask } from './worker-task.js';
 import { installEditor } from './editor.js';
 import { formatDiagnostic, formatWasm } from './ui.js';
@@ -22,6 +23,7 @@ const summary = document.querySelector('#summary');
 const runButton = document.querySelector('#run');
 const stopButton = document.querySelector('#stop');
 const selector = document.querySelector('#example');
+const backend = document.querySelector('#backend');
 const shareButton = document.querySelector('#share');
 const downloadButton = document.querySelector('#download');
 const formatButton = document.querySelector('#format');
@@ -75,12 +77,14 @@ const jumpTo = installEditor(editor, {
 let working = false;
 let formatting = false;
 const workerTask = createWorkerTask();
+const tenantPool = createTenantPool();
 const formatterTask = createWorkerTask();
 const FORMAT_DEADLINE_MS = 6000;
 const COMPILE_DEADLINE_MS = 10000;
 const RUN_DEADLINE_MS = 3000;
 let runGeneration = 0;
 let lastWasm = null;
+let lastTarget = 'wasm';
 
 function display(message, kind = 'neutral') {
   output.textContent = message;
@@ -93,6 +97,7 @@ function setRunning(value) {
   stopButton.disabled = !value;
   editor.readOnly = value;
   selector.disabled = value;
+  backend.disabled = value;
   formatButton.disabled = value;
   checkFormatButton.disabled = value;
   if (value) status.textContent = 'Compiling';
@@ -101,6 +106,7 @@ function setRunning(value) {
 async function run() {
   if (working || formatting) return;
   const generation = ++runGeneration;
+  const target=backend.value;
   setRunning(true);
   lastWasm = null;
   downloadButton.disabled = true;
@@ -111,21 +117,22 @@ async function run() {
   display('Compiling Atto source inside WebAssembly…');
   try {
     const start = performance.now();
-    const compiled = await workerTask.request(new URL('./compiler-worker.js', import.meta.url), { source: editor.value }, COMPILE_DEADLINE_MS, 'Compilation');
+    const compiled = await workerTask.request(new URL('./compiler-worker.js', import.meta.url), { source: editor.value, target }, COMPILE_DEADLINE_MS, 'Compilation');
     if (generation !== runGeneration) return;
     if (!compiled.ok) {
       showDiagnostic(compiled.diagnostics?.[0]);
       status.textContent = 'Compiler error';
       selectTab('diagnostics');
-      display('Compilation failed. No WebAssembly artifact was produced.', 'error');
+      display('Compilation failed. No artifact was produced.', 'error');
       return;
     }
-    lastWasm = compiled.wasm;
-    wasmPreview.textContent = formatWasm(lastWasm);
+    lastTarget=target;
+    lastWasm=target==='javascript'?new TextEncoder().encode(compiled.esm):compiled.wasm;
+    wasmPreview.textContent=target==='javascript'?compiled.esm.slice(0,8192)+(compiled.esm.length>8192?'\n[preview truncated]':''):formatWasm(lastWasm);
     bytesLabel.textContent = `${lastWasm.byteLength} bytes`;
     downloadButton.disabled = false;
     status.textContent = 'Executing';
-    const executed = await workerTask.request(new URL('./runner-worker.js', import.meta.url), { wasm: lastWasm }, RUN_DEADLINE_MS, 'Execution');
+    const executed = await tenantPool.run('default', target==='javascript'?{target,esm:compiled.esm}:{target,wasm:lastWasm}, RUN_DEADLINE_MS);
     if (generation !== runGeneration) return;
     const printed = executed.stdout ? executed.stdout + (executed.truncated ? '\n[output truncated]\n' : '') + (executed.stdout.endsWith('\n') ? '' : '\n') : '';
     if (!executed.ok) {
@@ -134,8 +141,8 @@ async function run() {
       return;
     }
     status.textContent = 'Completed';
-    const actorNote = executed.actors ? ` · ${executed.actors} actor${executed.actors === 1 ? '' : 's'} in dedicated Web Workers` : '';
-    display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms${actorNote}`, 'success');
+    const actorNote = executed.actors ? ` · ${executed.actors} actor${executed.actors === 1 ? '' : 's'} in one tenant Web Worker` : '';
+    display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of ${target==='wasm'?'Wasm':'JavaScript'} · ${Math.round(performance.now() - start)} ms${actorNote}`, 'success');
   } catch (error) {
     if (generation === runGeneration) {
       status.textContent = 'Worker error';
@@ -213,6 +220,7 @@ function stop() {
   // Invalidate the old run before resolving its pending worker request.
   runGeneration++;
   workerTask.cancel();
+  tenantPool.cancel('default');
   setRunning(false);
   status.textContent = 'Cancelled';
   display('Compilation or execution cancelled.', 'neutral');
@@ -242,10 +250,10 @@ async function share() {
 }
 function download() {
   if (!lastWasm) return;
-  const blob = new Blob([lastWasm], { type: 'application/wasm' });
+  const blob = new Blob([lastWasm], { type: lastTarget==='wasm'?'application/wasm':'text/javascript' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'main.wasm';
+  a.href = url; a.download = lastTarget==='wasm'?'main.wasm':'main.mjs';
   a.click();
   // Avoid cancelling a pending browser download by revoking synchronously.
   setTimeout(() => URL.revokeObjectURL(url), 60000);
@@ -263,6 +271,12 @@ function invalidateArtifact() {
   }
 }
 editor.addEventListener('input', invalidateArtifact);
+backend.addEventListener('change',()=>{
+  document.querySelector('#tab-wasm').textContent=backend.value==='wasm'?'Wasm':'JavaScript';
+  document.querySelector('#artifact-label').textContent=backend.value==='wasm'?'GENERATED WEBASSEMBLY':'GENERATED JAVASCRIPT';
+  downloadButton.textContent=backend.value==='wasm'?'Download .wasm':'Download .mjs';
+  invalidateArtifact();
+});
 
 runButton.addEventListener('click', run);
 formatButton.addEventListener('click', () => formatCode(false));

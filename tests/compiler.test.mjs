@@ -33,7 +33,7 @@ const main = body => `pub fnc main(): int {\n${body}\n}`;
 test('vendored compiler matches its provenance receipt', () => {
   assert.equal(createHash('sha256').update(compilerBytes).digest('hex'), receipt.compiler_sha256);
   assert.equal(compilerBytes.length, receipt.compiler_bytes);
-  assert.equal(receipt.source_repository, 'atto-lang/atto-source.rs');
+  assert.equal(receipt.source_repository, 'ores-truffle-oreslang/oreslang-source.rs');
   assert.match(receipt.source_head, /^[0-9a-f]{40}$/);
   assert.equal(receipt.compiler_abi, COMPILER_ABI);
   assert.equal(receipt.guest_abi, 'atto.browser.guest.v2');
@@ -201,4 +201,26 @@ test('stdout truncation never splits a surrogate pair', () => {
   const exact = { text: '', truncated: false };
   appendCapped(exact, 'a'.repeat(STDOUT_LIMIT));
   assert.deepEqual([exact.text.length, exact.truncated], [STDOUT_LIMIT, false]);
+});
+
+test("canonical compiler supports typed-IR ESM alongside Wasm",async()=>{
+  const r=compiler.compile("pub fnc main(): int { return 6 * 7; }","javascript");
+  assert.equal(r.ok,true);
+  const guest=await import("data:text/javascript,"+encodeURIComponent(r.esm));
+  assert.equal(guest.instantiate().exports.main(),42n);
+  assert.equal(receipt.source_path,"browser");
+});
+
+test("canonical JS compiler bridge matches its source receipt",async()=>{
+  const bytes=await readFile(new URL("../src/compiler.js",import.meta.url));
+  assert.equal(receipt.bridge_sha256,createHash("sha256").update(bytes).digest("hex"));
+  assert.equal(receipt.bridge_source_repository,"ores-truffle-oreslang/oreslang-source.js");
+  assert.match(receipt.bridge_source_head,/^[a-f0-9]{40}$/);
+});
+
+test('tenant runtime and MessageChannel hook match canonical source pins',async()=>{
+ assert.equal(receipt.runtime_source_head,receipt.bridge_source_head);
+ assert.equal(receipt.runtime_source_repository,'ores-truffle-oreslang/oreslang-source.js');
+ assert.deepEqual(Object.keys(receipt.runtime_files),['src/canonical-actor-runtime.mjs','src/tenant-turn-queue.mjs']);
+ for(const [path,sha]of Object.entries(receipt.runtime_files))assert.equal(createHash('sha256').update(await readFile(new URL('../'+path,import.meta.url))).digest('hex'),sha);
 });

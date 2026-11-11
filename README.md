@@ -1,8 +1,8 @@
 # AttoLang Playground
 
-A self-hosted, static **Atto source → WebAssembly compiler → WebAssembly guest** demo. Both compiler and generated program execute inside the visitor's browser. No compilation server and no user-code uploads.
+A self-hosted, static **Atto source → canonical compiler → WebAssembly or JavaScript guest** playground. Both compiler and generated program execute inside the visitor's browser. No compilation server and no user-code uploads.
 
-The compiler is [atto-lang/atto-source.rs](https://github.com/atto-lang/atto-source.rs), a Rust AttoLang compiler built for `wasm32-unknown-unknown`. It emits real binary Wasm, not a JavaScript simulation. It compiles a subset of AttoLang: functions, recursion, `int`/`bool`, bindings, `if`/`while`/`for`/`loop` and `stdio.println`. Its syntax follows the reference compiler, and everything outside the subset is rejected. See [the contract](docs/COMPILER_CONTRACT.md).
+The compiler is [oreslang-source.rs/browser](https://github.com/ores-truffle-oreslang/oreslang-source.rs/pull/52), a Rust AttoLang compiler built for `wasm32-unknown-unknown`. It emits real binary Wasm, not a JavaScript simulation. It compiles a subset of AttoLang: functions, recursion, `int`/`bool`, bindings, `if`/`while`/`for`/`loop` and `stdio.println`. Its syntax follows the reference compiler, and everything outside the subset is rejected. See [the contract](docs/COMPILER_CONTRACT.md).
 
 ## Verify locally
 
@@ -14,14 +14,14 @@ npm run serve           # http://localhost:8080
 CHROME_BIN=... npm run test:e2e   # 17 real-browser scenarios under /play/
 ```
 
-To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-source.rs`. It rebuilds the wasm and rewrites `public/atto_compiler.receipt.json` with the source head, tree, toolchain and sha256. CI fails if the shipped wasm does not match the receipt.
+To update the compiler, run `npm run vendor:compiler -- /path/to/clean/oreslang-source.rs /path/to/clean/oreslang-source.js`. It rebuilds the wasm and rewrites `public/atto_compiler.receipt.json` with the source head, tree, toolchain and sha256. CI fails if the shipped wasm does not match the receipt.
 
 ## Architecture
 
 - `public/atto_compiler.wasm` and `public/atto_compiler.receipt.json`: the vendored compiler and its provenance.
 - `src/compiler.js`: compiler ABI v2 bridge.
 - `src/compiler-worker.js`: disposable compilation worker with a 3-second deadline.
-- `src/runner-worker.js` and `src/guest.js`: a disposable guest worker. It grants only `atto.print_*`, caps stdout and maps panics to messages.
+- `src/tenant-pool.js`, `src/tenant-worker.js`, `src/canonical-actor-runtime.mjs` and `src/tenant-turn-queue.mjs`: one disposable Worker per tenant run, actor-private Wasm memories, bounded capabilities/quotas and MessageChannel turn scheduling.
 - `examples/*.atto`: the example programs. Each one is checked against the Java reference compiler.
 - `src/app.js` and `index.html`: the static UI, examples, Wasm download and share links.
 
@@ -32,7 +32,7 @@ Host this directory on any static host, with `.wasm` served as `application/wasm
 
 The full browser E2E suite checks a compiled 42 result, downloaded Wasm execution, stale-artifact invalidation on edits, mutable and immutable examples, syntax diagnostics, runtime traps, source limits, recovery, Unicode share-link reload, stop/restart cancellation, HTML-injection rejection and static-only HTTP traffic. It uses a disposable Chrome profile, an ephemeral DevTools port and a local static server. It is separate from the Node compiler test suite.
 
-Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The current C bootstrap accepts only the documented M0 scalar subset; promotion to canonical Atto frontend and typed IR requires compiler-backed parity evidence and independent review.
+Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The pinned compiler comes from the canonical oreslang-source.rs/browser target. Its Wasm and optional ESM outputs share the parser/checker. Native Rust/Cranelift, Java and LLVM parity remains incomplete; see the canonical integration evidence.
 
 
 ## Browser editor UI
@@ -48,3 +48,15 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+## Canonical compiler integration
+
+The compiler receipt now pins `ores-truffle-oreslang/oreslang-source.rs`, source path `browser`, plus exact commit/tree/toolchain/digest. `vendor:compiler` builds that canonical crate with Rust 1.85.1. `src/compiler.js` is the host-neutral ABI bridge also maintained in oreslang-source.js and oreslang-source.wasm; its optional `compile(source, "javascript")` selects the shared typed-IR ESM emitter. The Run with selector executes either Wasm (default) or JavaScript and downloads the selected artifact. Both outputs run through the same tenant scheduler and limits.
+
+Both output targets now place all actors in their tenant Worker, with one private Wasm instance/memory per actor. The default UI uses one tenant; the host API admits up to four concurrent tenants, each with its own Worker and deadline. Native Cranelift/Java/LLVM parity remains open. Source integration does not approve public disclosure or deploy new Pages bytes.
+
+Vendoring also copies the ABI bridge from the clean canonical source.js checkout and records its exact commit/path/SHA-256. The compiler receipt binds both the Rust artifact and the JS host bridge; neither is inferred from a repository name.
+
+## Task scheduling boundary
+
+Actor turns share a round-robin scheduler inside the tenant Worker, yielding a MessageChannel task between turns. JavaScript output has the same checked arithmetic, private-memory and deadline behavior as Wasm output. A blocked tenant is terminated independently from a healthy tenant. Source-level Atto `nb`/Task/await and cooperation inside long-running turns still require compiler-managed continuation/frame lowering; the new MessageChannel hook is their carrier primitive, not a claim that a callback alone implements the Task API.

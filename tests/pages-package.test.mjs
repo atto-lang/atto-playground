@@ -13,7 +13,7 @@ async function fixture(t) {
   for (const name of PAGES_ASSETS) {
     const path = join(root, name);
     await mkdir(dirname(path), { recursive: true });
-    const checked = ['public/atto_compiler.wasm','public/atto_compiler.receipt.json','src/compiler-pin.js',
+    const checked = ['src/compiler.js','src/canonical-actor-runtime.mjs','src/tenant-turn-queue.mjs','public/atto_compiler.wasm','public/atto_compiler.receipt.json','src/compiler-pin.js',
       'public/oreslang_format.wasm','public/oreslang_format.receipt.json','src/formatter-pin.js'].includes(name);
     await writeFile(path, checked ? await readFile(new URL('../'+name, import.meta.url)) : 'safe ' + name);
   }
@@ -104,4 +104,11 @@ test('forged formatter receipt or Wasm is rejected before staging', async t => {
   await writeFile(join(root,'public/oreslang_format.wasm'),'bad-wasm');
   await assert.rejects(packagePages({root}),/Invalid compiler Wasm/);
   await assert.rejects(readdir(join(root,'_site')),/ENOENT/);
+});
+
+test('rejects modified tenant runtime or scheduling hook before release staging',async t=>{
+ const root=await fixture(t);
+ await writeFile(join(root,'src/tenant-turn-queue.mjs'),'export function createTurnQueue(){return null}');
+ await assert.rejects(packagePages({root}),/tenant runtime pin mismatch/);
+ await assert.rejects(readdir(join(root,'_site')),/ENOENT/);
 });
