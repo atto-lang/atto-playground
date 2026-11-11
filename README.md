@@ -22,7 +22,7 @@ To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-sour
 - `src/compiler.js`: compiler ABI v2 bridge.
 - `src/compiler-worker.js`: disposable compilation worker with a 3-second deadline.
 - `src/runner-worker.js` and `src/guest.js`: a disposable guest worker. It grants only `atto.print_*`, caps stdout and maps panics to messages.
-- `examples/*.atto`: the example programs. Each one is checked against the Java reference compiler.
+- `examples/*.atto`: the example programs. The actor example is validated by the Rust/Wasm compiler, not yet by all AttoLang backends.
 - `src/app.js` and `index.html`: the static UI, examples, Wasm download and share links.
 
 ## Deployment
