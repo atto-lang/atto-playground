@@ -1,6 +1,6 @@
 # AttoLang Playground
 
-A self-hosted, static **Atto source → WebAssembly compiler → WebAssembly guest** demo. Both compiler and generated program execute inside the visitor's browser. No compilation server and no user-code uploads.
+A self-hosted, static **Atto source → canonical compiler → WebAssembly or JavaScript guest** playground. Both compiler and generated program execute inside the visitor's browser. No compilation server and no user-code uploads.
 
 The compiler is [oreslang-source.rs/browser](https://github.com/ores-truffle-oreslang/oreslang-source.rs/pull/52), a Rust AttoLang compiler built for `wasm32-unknown-unknown`. It emits real binary Wasm, not a JavaScript simulation. It compiles a subset of AttoLang: functions, recursion, `int`/`bool`, bindings, `if`/`while`/`for`/`loop` and `stdio.println`. Its syntax follows the reference compiler, and everything outside the subset is rejected. See [the contract](docs/COMPILER_CONTRACT.md).
 
@@ -21,7 +21,7 @@ To update the compiler, run `npm run vendor:compiler -- /path/to/clean/oreslang-
 - `public/atto_compiler.wasm` and `public/atto_compiler.receipt.json`: the vendored compiler and its provenance.
 - `src/compiler.js`: compiler ABI v2 bridge.
 - `src/compiler-worker.js`: disposable compilation worker with a 3-second deadline.
-- `src/runner-worker.js` and `src/guest.js`: a disposable guest worker. It grants only `atto.print_*`, caps stdout and maps panics to messages.
+- `src/tenant-pool.js`, `src/tenant-worker.js`, `src/canonical-actor-runtime.mjs` and `src/tenant-turn-queue.mjs`: one disposable Worker per tenant run, actor-private Wasm memories, bounded capabilities/quotas and MessageChannel turn scheduling.
 - `examples/*.atto`: the example programs. Each one is checked against the Java reference compiler.
 - `src/app.js` and `index.html`: the static UI, examples, Wasm download and share links.
 
@@ -51,8 +51,12 @@ The **Format** and **Check format** actions run the real Rust `oreslang-format` 
 
 ## Canonical compiler integration
 
-The compiler receipt now pins `ores-truffle-oreslang/oreslang-source.rs`, source path `browser`, plus exact commit/tree/toolchain/digest. `vendor:compiler` builds that canonical crate with Rust 1.85.1. `src/compiler.js` is the host-neutral ABI bridge also maintained in oreslang-source.js and oreslang-source.wasm; its optional `compile(source, "javascript")` selects the shared typed-IR ESM emitter. The page continues to execute Wasm by default. The ESM per-tenant Worker actor path is exercised by the canonical compiler’s browser tests; it is not yet a second UI backend selector.
+The compiler receipt now pins `ores-truffle-oreslang/oreslang-source.rs`, source path `browser`, plus exact commit/tree/toolchain/digest. `vendor:compiler` builds that canonical crate with Rust 1.85.1. `src/compiler.js` is the host-neutral ABI bridge also maintained in oreslang-source.js and oreslang-source.wasm; its optional `compile(source, "javascript")` selects the shared typed-IR ESM emitter. The Run with selector executes either Wasm (default) or JavaScript and downloads the selected artifact. Both outputs run through the same tenant scheduler and limits.
 
-Current Wasm actors still use a dedicated child Worker per actor; their state now resides in fixed private linear memory. Moving the default UI runtime to one tenant Worker/multiple actors and completing native Cranelift/Java/LLVM parity remain open. Source integration does not approve public disclosure or deploy new Pages bytes.
+Both output targets now place all actors in their tenant Worker, with one private Wasm instance/memory per actor. The default UI uses one tenant; the host API admits up to four concurrent tenants, each with its own Worker and deadline. Native Cranelift/Java/LLVM parity remains open. Source integration does not approve public disclosure or deploy new Pages bytes.
 
 Vendoring also copies the ABI bridge from the clean canonical source.js checkout and records its exact commit/path/SHA-256. The compiler receipt binds both the Rust artifact and the JS host bridge; neither is inferred from a repository name.
+
+## Task scheduling boundary
+
+Actor turns share a round-robin scheduler inside the tenant Worker, yielding a MessageChannel task between turns. JavaScript output has the same checked arithmetic, private-memory and deadline behavior as Wasm output. A blocked tenant is terminated independently from a healthy tenant. Source-level Atto `nb`/Task/await and cooperation inside long-running turns still require compiler-managed continuation/frame lowering; the new MessageChannel hook is their carrier primitive, not a claim that a callback alone implements the Task API.

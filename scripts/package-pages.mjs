@@ -12,9 +12,10 @@ export const PAGES_ASSETS = Object.freeze([
   'src/app.js',
   'src/compiler.js',
   'src/compiler-worker.js',
-  'src/runner-worker.js',
-  'src/actor-host.js',
-  'src/actor-worker.js',
+  'src/tenant-worker.js',
+  'src/tenant-pool.js',
+  'src/canonical-actor-runtime.mjs',
+  'src/tenant-turn-queue.mjs',
   'src/guest.js',
   'src/worker-task.js',
   'src/editor.js',
@@ -88,6 +89,15 @@ export async function packagePages({
       compiler.length !== COMPILER_BYTES ||
       createHash('sha256').update(compiler).digest('hex') !== receipt.compiler_sha256) {
     throw new Error('Compiler receipt, pinned digest or byte length does not match');
+  }
+  if(receipt.runtime_source_repository!=='ores-truffle-oreslang/oreslang-source.js'||
+     receipt.runtime_source_head!==receipt.bridge_source_head||! /^[a-f0-9]{40}$/.test(receipt.runtime_source_head))
+    throw new Error('Tenant runtime source provenance mismatch');
+  for(const path of ['src/compiler.js','src/canonical-actor-runtime.mjs','src/tenant-turn-queue.mjs']){
+    const expected=path==='src/compiler.js'?receipt.bridge_sha256:receipt.runtime_files?.[path];
+    const bytes=files.find(x=>x.name===path).bytes;
+    if(!/^[a-f0-9]{64}$/.test(expected??'')||createHash('sha256').update(bytes).digest('hex')!==expected)
+      throw new Error('Compiler bridge/tenant runtime pin mismatch: '+path);
   }
   const formatter = files.find(x => x.name === 'public/oreslang_format.wasm').bytes;
   const formatterReceipt = JSON.parse(files.find(x => x.name === 'public/oreslang_format.receipt.json').bytes.toString('utf8'));

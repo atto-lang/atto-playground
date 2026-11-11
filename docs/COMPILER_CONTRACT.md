@@ -58,22 +58,23 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 - **Exports:** `main: () -> i64` and `panic_code: mut i32` (1 = integer overflow, 2 = division by zero, which is reserved, 3 = object heap exhausted). `memory` is exported for string literals, classes or actors. It is fixed and non-shared, with strings, aligned actor state slots and the object heap in disjoint regions; with classes it is 1 MiB. Programs with actors also export `actor_init` and `actor_receive`, and carry an `atto.actors` custom section of type names.
 - **Imports:** only from module `atto`: `print_i64`, `print_bool`, `print_str` and `print_newline`, plus `actor_spawn` and `actor_send` for programs with actors. `src/guest.js` refuses any other import, validates the actor table, and caps stdout at 64 KiB.
 
-### Actors in Web Workers
+### Tenant Workers and actor-private memories
 
-`src/runner-worker.js` runs `main`. When a guest has actors, `src/actor-host.js` grants `actor_spawn` and `actor_send`:
+The playground selects Wasm or compiler-emitted ESM. Both execute through `src/tenant-worker.js` and the pinned canonical `runTenantGuest` runtime from source.js. Every active tenant run owns exactly one Worker; all actors for that tenant execute inside it. No per-actor child Workers are created. The UI normally has one tenant; the host pool supports four concurrent tenant runs.
 
-- Each `spawn` starts one dedicated Web Worker (`src/actor-worker.js`) with a private copy of the module. Actor state lives in that instance's fixed private Wasm linear memory, so actors share no memory.
-- `send` posts mail with sequence numbers from 0. The actor worker handles mail strictly in order and reports each completion. The host rejects out-of-order or unexpected replies.
-- Limits: 16 actors per run and 10,000 messages per actor (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`). Actors cannot spawn or send.
-- The run ends when `main` has returned and every mailbox has drained, which matches the Java reference. Output from different actors may interleave in any order.
-- A panicking actor fails the run as `E_PANIC: … in actor Name#n` and stops receiving mail.
-- Stop and the 3-second deadline terminate the runner worker, which ends every actor worker it owns.
+- Each actor gets a fresh instance with non-shared Wasm linear memory; its persistent state and heap cannot alias another actor's memory. Immutable module code may be reused.
+- Actor turns run round-robin, with FIFO and sequence numbers preserved per actor. A MessageChannel task separates turns so the carrier event loop can make progress. Cross-actor output order is not a language guarantee.
+- Limits: 16 actors, 10,000 accepted messages per actor, 20,000 aggregate messages, 1 MiB per instance and 16 MiB aggregate guest memory including main. Memory admission uses the compiler's fixed per-instance layout and rejects before allocating an over-budget actor. Browser/JS-engine overhead is outside this accounting.
+- Main returns before mailbox drain; a panicking actor reports its name/id and fails its tenant. Other tenants have independent Workers and cancellation/deadlines.
+- A noncooperative turn can stall its tenant. The parent terminates that Worker on Stop/deadline. Compiler-lowered Task suspension, await, cancellation fencing and cooperation checkpoints inside a turn remain required for the full Atto Task API. A callback or Promise alone is not that API.
+
+`src/runner-worker.js`, `src/actor-host.js` and `src/actor-worker.js` remain legacy source fixtures for existing tests, but are not part of the new release allowlist.
 
 Each guest runs in a fresh worker with a 3-second deadline, which ends infinite loops. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
 
 ## Static release and disclosure gate
 
-The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **33 enumerated browser assets** (HTML, CSS, JS including the actor workers, nine examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
+The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **34 enumerated browser assets** (HTML, CSS, JS including the actor workers, nine examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
 
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 

@@ -217,3 +217,10 @@ test("canonical JS compiler bridge matches its source receipt",async()=>{
   assert.equal(receipt.bridge_source_repository,"ores-truffle-oreslang/oreslang-source.js");
   assert.match(receipt.bridge_source_head,/^[a-f0-9]{40}$/);
 });
+
+test('tenant runtime and MessageChannel hook match canonical source pins',async()=>{
+ assert.equal(receipt.runtime_source_head,receipt.bridge_source_head);
+ assert.equal(receipt.runtime_source_repository,'ores-truffle-oreslang/oreslang-source.js');
+ assert.deepEqual(Object.keys(receipt.runtime_files),['src/canonical-actor-runtime.mjs','src/tenant-turn-queue.mjs']);
+ for(const [path,sha]of Object.entries(receipt.runtime_files))assert.equal(createHash('sha256').update(await readFile(new URL('../'+path,import.meta.url))).digest('hex'),sha);
+});

@@ -16,8 +16,10 @@ self.onmessage = async ({ data }) => {
         });
     }
     const compiler = await compilerPromise;
-    const compiled = compiler.compile(data.source);
-    if (compiled.ok) {
+    const compiled = compiler.compile(data.source,data.target??'wasm');
+    if (compiled.ok && data.target==='javascript') {
+      self.postMessage({ ok: true, esm: compiled.esm });
+    } else if (compiled.ok) {
       self.postMessage({ ok: true, wasm: compiled.wasm }, [compiled.wasm.buffer]);
     } else {
       self.postMessage({ ok: false, diagnostics: compiled.diagnostics });

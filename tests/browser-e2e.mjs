@@ -9,7 +9,7 @@ import { join, resolve, sep, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const root = process.env.ATTO_STATIC_ROOT ? resolve(process.env.ATTO_STATIC_ROOT) : resolve(new URL('..', import.meta.url).pathname);
-const mime = { '.html':'text/html', '.css':'text/css', '.js':'text/javascript', '.wasm':'application/wasm', '.md':'text/plain' };
+const mime = { '.mjs':'text/javascript', '.html':'text/html', '.css':'text/css', '.js':'text/javascript', '.wasm':'application/wasm', '.md':'text/plain' };
 const requests = [];
 const server = createServer(async (req, res) => {
   requests.push({method:req.method, url:req.url});
@@ -96,7 +96,8 @@ try {
   // examples are fetched .atto files, so wait for the editor to be replaced
   const example=async name=>{
     await js("(()=>{const e=document.querySelector('#example');e.value="+JSON.stringify(name)+";e.dispatchEvent(new Event('change',{bubbles:true}));})()");
-    await poll(async()=>(await view())?.output?.includes('Source changed'),'example '+name+' loaded');
+    const expected=await readFile(join(root,'examples',name+'.atto'),'utf8');
+    await poll(async()=>(await view())?.source===expected,'example '+name+' loaded');
   };
   async function run(kind,expected) {
     await click('run');
@@ -222,8 +223,8 @@ try {
   await example('actors');
   s=await run('success','main() → 0');
   assert.match(s.output,/^main sent 5 messages\n1\n3\n6\n10\n15\nmain\(\) → 0/);
-  assert.match(s.output,/1 actor in dedicated Web Workers/);
-  ok('define actor: mail is delivered FIFO to actor state in a dedicated Web Worker');
+  assert.match(s.output,/1 actor in one tenant Web Worker/);
+  ok('define actor: mail is delivered FIFO to actor state inside its tenant Web Worker');
   const counter='define actor Counter as\n  let int total = 0;\n  receive(ActorMail<int> mail): void {\n    self.total = self.total + mail.value;\n    stdio.println(mail.sequence * 1000 + self.total);\n    return;\n  }\nend\n';
   await source(counter+'pub fnc main(): int {\n  val a = spawn Counter();\n  val b = spawn Counter();\n  a.send(1);\n  b.send(10);\n  a.send(2);\n  b.send(20);\n  return 3;\n}');
   s=await run('success','main() → 3');
@@ -231,8 +232,8 @@ try {
     const lines=s.output.split('\nmain()')[0].split('\n').sort();
     assert.deepEqual(lines,['1','10','1003','1030'].sort(),'each actor owns its state and sequence');
   }
-  assert.match(s.output,/2 actors in dedicated Web Workers/);
-  ok('two actors run in separate workers with independent state');
+  assert.match(s.output,/2 actors in one tenant Web Worker/);
+  ok('two actors share their tenant Worker with independent memory');
   await source('define actor W as\n  receive(ActorMail<int> mail): void {\n    stdio.println(mail.value);\n    stdio.println(mail.value * 9223372036854775807);\n    return;\n  }\nend\npub fnc main(): int {\n  val w = spawn W();\n  w.send(7);\n  w.send(8);\n  return 0;\n}');
   s=await run('error','E_PANIC: integer overflow in actor W#0');
   assert.match(s.output,/^7\nE_PANIC: integer overflow in actor W#0/);
@@ -291,8 +292,51 @@ try {
   s=await run('error','E_TOPLEVEL');
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
+  await js("(()=>{const e=document.querySelector('#backend');e.value='javascript';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  assert.equal((await view()).downloadDisabled,true);
+  for(const [name,want] of [['hello','main() → 42'],['fib','main() → 144'],['primes','main() → 10'],['classes','main() → 42'],['enums','main() → 7'],['actors','main() → 0']]){
+    await example(name);await run('success',want);
+  }
+  assert.match((await view()).output,/1 actor in one tenant Web Worker/);
+  ok('JavaScript backend executes functions, recursion, loops, classes, enums and source actors');
+  await source('pub fnc main(): int { return 84; }');await run('success','main() → 84');await click('download');
+  const esmPath=join(downloads,'main.mjs');await poll(async()=>{try{return (await readFile(esmPath,'utf8')).includes('export function instantiate')}catch{return false}},'downloaded ESM');
+  const downloaded=await import('data:text/javascript,'+encodeURIComponent(await readFile(esmPath,'utf8')));
+  assert.equal(downloaded.instantiate().exports.main(),84n);
+  ok('JavaScript artifact downloads as executable ESM and changing backend invalidates it');
+  await source('pub fnc main(): int { val x=9223372036854775807; return x+1; }');
+  await run('error','E_PANIC: integer overflow');
+  await source('pub fnc main(): int { loop {} }');await run('error','deadline');
+  await source('pub fnc main(): int { return 43; }');await run('success','main() → 43');
+  ok('JavaScript backend preserves checked overflow, hard Worker deadline and recovery');
+  const tenantResult=await js(`(async()=>{
+    const {createCompiler}=await import('/play/src/compiler.js');
+    const {createTenantPool}=await import('/play/src/tenant-pool.js');
+    const compiler=await createCompiler(new Uint8Array(await(await fetch('/play/public/atto_compiler.wasm')).arrayBuffer()));
+    const created=[],NativeWorker=globalThis.Worker;
+    class ObservedWorker extends NativeWorker{constructor(url,options){super(url,options);created.push(new URL(url).pathname);}}
+    const pool=createTenantPool({WorkerImpl:ObservedWorker});
+    const source='define actor C as let int n=0; receive(ActorMail<int> mail): void {self.n=self.n+mail.value;stdio.println(self.n);return;} end pub fnc main(): int {val a=spawn C();val b=spawn C();a.send(40);b.send(7);a.send(2);return 0;}';
+    const outcomes=[];
+    try{
+      for(const target of ['wasm','javascript']){
+        const c=compiler.compile(source,target),spin=compiler.compile('pub fnc main(): int {loop {}}',target);
+        const payload=x=>target==='wasm'?{target,wasm:x.wasm}:{target,esm:x.esm};
+        const blocked=pool.run('blocked',payload(spin),250).then(()=>false,e=>e.message.includes('deadline'));
+        const healthy=await pool.run('healthy',payload(c),3000);
+        const again=await pool.run('healthy',payload(c),3000);
+        outcomes.push({target,healthy,again,blocked:await blocked,count:pool.count});
+      }
+      return {outcomes,created};
+    }finally{pool.close();}
+  })()`);
+  for(const x of tenantResult.outcomes){assert.equal(x.blocked,true);assert.equal(x.healthy.stdout,'40\n7\n42\n');assert.deepEqual(x.healthy,x.again);assert.equal(x.healthy.privateMemories,3);assert.equal(x.count,0);}
+  assert.equal(tenantResult.created.length,6);
+  assert.ok(tenantResult.created.every(x=>x==='/play/src/tenant-worker.js'));
+  assert.ok(!requests.some(r=>r.url.includes('/play/src/actor-worker.js')),'no per-actor child Worker is created by either target');
+  ok('both backends isolate concurrent tenants, survive a sibling tenant timeout and allocate one Worker per tenant run');
   assert.ok(requests.some(r=>r.url.includes('/play/public/atto_compiler.wasm')));
-  assert.ok(requests.some(r=>r.url.includes('/play/src/actor-worker.js')),'actor worker script served statically');
+  assert.ok(requests.some(r=>r.url.includes('/play/src/tenant-worker.js')),'tenant worker script served statically');
   assert.ok(requests.every(r=>r.method==='GET'),'Unexpected server-side submission of code');
   ok('compiler Wasm served as static GET, no source POST');
   console.log('PASS: '+passed+' real-browser E2E scenarios');

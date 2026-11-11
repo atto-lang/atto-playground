@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 
 const root = resolve(new URL('..', import.meta.url).pathname);
-const mime = { '.js': 'text/javascript; charset=utf-8', '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.wasm': 'application/wasm', '.md': 'text/plain; charset=utf-8' };
+const mime = { '.mjs':'text/javascript', '.js': 'text/javascript; charset=utf-8', '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.wasm': 'application/wasm', '.md': 'text/plain; charset=utf-8' };
 const server = createServer(async (req, res) => {
   try {
     const rel = decodeURIComponent(new URL(req.url, 'http://localhost').pathname).replace(/^\/+/, '') || 'index.html';

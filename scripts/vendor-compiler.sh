@@ -3,7 +3,7 @@
 # write public/atto_compiler.receipt.json. The playground never builds the
 # compiler in CI (oreslang-source.rs is private); CI verifies the receipt digest.
 #
-# usage: scripts/vendor-compiler.sh /path/to/oreslang-source.rs
+# usage: scripts/vendor-compiler.sh /path/to/oreslang-source.rs /path/to/oreslang-source.js
 set -eu
 src="${1:?usage: vendor-compiler.sh /path/to/oreslang-source.rs /path/to/oreslang-source.js}"
 bridge_src="${2:?provide the clean canonical oreslang-source.js checkout}"
@@ -12,6 +12,8 @@ cd "$bridge_src"
 test -z "$(git status --porcelain)" || { echo "oreslang-source.js checkout is dirty" >&2; exit 1; }
 bridge_head="$(git rev-parse HEAD)"
 cp src/canonical-browser-compiler.mjs "$here/src/compiler.js"
+cp src/canonical-actor-runtime.mjs "$here/src/canonical-actor-runtime.mjs"
+cp src/tenant-turn-queue.mjs "$here/src/tenant-turn-queue.mjs"
 cd "$src"
 test -z "$(git status --porcelain)" || { echo "oreslang-source.rs checkout is dirty" >&2; exit 1; }
 RUSTC="$(rustup which --toolchain 1.85.1 rustc)" rustup run 1.85.1 cargo rustc --manifest-path browser/Cargo.toml --locked --release --lib --target wasm32-unknown-unknown --crate-type cdylib -- -C link-arg=--max-memory=67108864
@@ -32,6 +34,9 @@ const receipt = {
   bridge_source_head: process.env.BRIDGE_HEAD,
   bridge_source_path: 'src/canonical-browser-compiler.mjs',
   bridge_sha256: crypto.createHash('sha256').update(fs.readFileSync('src/compiler.js')).digest('hex'),
+  runtime_source_repository: 'ores-truffle-oreslang/oreslang-source.js',
+  runtime_source_head: process.env.BRIDGE_HEAD,
+  runtime_files: Object.fromEntries(['src/canonical-actor-runtime.mjs','src/tenant-turn-queue.mjs'].map(path => [path,crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex')])),
   output_targets: ['wasm', 'javascript'],
   source_head: process.env.HEAD_SHA,
   source_tree: process.env.TREE_SHA,
