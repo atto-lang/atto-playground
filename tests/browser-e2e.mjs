@@ -170,7 +170,16 @@ try {
   const alreadyReady = await run('success', 'main() → 42');
   assert.match(alreadyReady.output, /main\(\) → 42/);
   assert.equal(alreadyReady.downloadDisabled, false);
-  ok('await 42; compiles and runs as already-ready scalar without fake suspension');
+  assert.match(alreadyReady.output, /2 cooperative yield\(s\)/, 'two immediate await sites must actually release worker carrier');
+  ok('await 42; always yields twice to the Worker scheduler before returning 42');
+  await source('pub define class Worker as pub suspends mtd answer(): int { await 21; return await 42; } end pub suspends fnc main(): int { val worker = new Worker(); return await worker.answer(); }');
+  const classAwait = await run('success', 'main() → 42');
+  assert.match(classAwait.output, /3 cooperative yield\(s\)/, 'suspends mtd and its caller must cooperatively yield');
+  ok('suspends mtd and caller perform three real cooperative yields');
+  await source('pub define class Worker as pub suspends mtd answer(): int { return await 42; } end pub fnc main(): int { val worker = new Worker(); return worker.answer(); }');
+  const classEffect = await run('error', 'E_EFFECT');
+  assert.equal(classEffect.bytes, '—');
+  ok('non-suspends caller of suspends mtd is rejected without guest Wasm');
   await source('pub fnc main(): int { return await 42; }');
   const badEffect = await run('error', 'E_EFFECT');
   assert.equal(badEffect.bytes, '—');

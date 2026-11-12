@@ -2,7 +2,7 @@
 export const STDOUT_LIMIT = 64 * 1024;
 const PRINT = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline', 'print_f64']);
 const ACTOR = new Set(['actor_spawn', 'actor_send']);
-const ASYNC = new Set(['sleep_ms', 'barrier', 'task_start', 'task_await']);
+const ASYNC = new Set(['sleep_ms', 'barrier', 'task_start', 'task_await', 'cooperate']);
 const ALLOWED_EXPORTS = new Set(['main', 'panic_code', 'memory', 'actor_init', 'actor_receive', 'task_invoke']);
 export const MAX_ACTOR_TYPES = 256;
 const ACTOR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;

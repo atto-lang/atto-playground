@@ -11,7 +11,7 @@ self.onmessage = async ({ data }) => {
   const out = { text: '', truncated: false };
   let host = null;
   let taskHost = null;
-  const reply = message => self.postMessage({ ...message, stdout: out.text, truncated: out.truncated, actors: host?.count ?? 0 });
+  const reply = message => self.postMessage({ ...message, stdout: out.text, truncated: out.truncated, actors: host?.count ?? 0, cooperativeYields: taskHost?.cooperativeYields ?? 0 });
   try {
     const wasm = new Uint8Array(data.wasm);
     if (wasm.byteLength > 1 << 20 || !WebAssembly.validate(wasm)) throw new Error('Invalid/oversized guest module');

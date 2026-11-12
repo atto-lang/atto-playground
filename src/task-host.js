@@ -1,9 +1,9 @@
-/** Native guest Wasm JSPI bridge for experimental atto.async/1.
+/** Native guest Wasm JSPI bridge for experimental atto.async/2.
  * Task bodies run in WebAssembly, never in dynamically evaluated JavaScript.
  * Every task has one owning scope and a single-consumption Future<int> handle.
  * This first slice requires browser JSPI; no eager/sync task fallback. */
 export const MAX_TASKS = 64;
-const ASYNC_NAMES = new Set(['sleep_ms', 'barrier', 'task_start', 'task_await']);
+const ASYNC_NAMES = new Set(['sleep_ms', 'barrier', 'task_start', 'task_await', 'cooperate']);
 
 export function asyncGuestInfo(module) {
   const sections = WebAssembly.Module.customSections(module, 'atto.async');
@@ -16,7 +16,7 @@ export function asyncGuestInfo(module) {
     if (usesAsync || hasInvoke) throw Error('E_ASYNC: unmarked guest async capability');
     return { enabled: false };
   }
-  if (sections.length !== 1 || new Uint8Array(sections[0]).length !== 1 || new Uint8Array(sections[0])[0] !== 1) {
+  if (sections.length !== 1 || new Uint8Array(sections[0]).length !== 1 || new Uint8Array(sections[0])[0] !== 2) {
     throw Error('E_ASYNC: unsupported or duplicated guest async ABI');
   }
   if (!usesAsync || hasTaskStart !== hasInvoke || exp.some(x => x.name === 'task_invoke' && x.kind !== 'function')) {
@@ -28,7 +28,7 @@ export function asyncGuestInfo(module) {
   return { enabled: true };
 }
 
-export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS } = {}) {
+export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 16384 } = {}) {
   if (!asyncGuestInfo(module).enabled) throw Error('E_ASYNC: missing opt-in ABI');
   if (typeof WebAssembly.Suspending !== 'function' || typeof WebAssembly.promising !== 'function') {
     throw Error('E_ASYNC: this browser does not implement native Wasm JSPI');
@@ -37,6 +37,8 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS } = {}) {
   let instance = null;
   let closed = false;
   let next = 1;
+  let cooperativeYields = 0;
+  if (!Number.isInteger(maxYields) || maxYields < 1 || maxYields > 65536) throw Error('E_ASYNC: invalid yield quota');
   const jobs = new Map();
   let pendingBarrier = [];
   const stop = error => {
@@ -56,6 +58,16 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS } = {}) {
     }
     return Number(n);
   };
+  // A language-level await ALWAYS hands the worker carrier back to the
+  // scheduler for a new browser event-loop turn. Even an already-ready scalar
+  // or Future must never take a synchronous/Promise.resolve fast path.
+  const cooperate = new WebAssembly.Suspending(async () => {
+    ensureOpen();
+    if (cooperativeYields >= maxYields) throw Error('E_ASYNC: cooperative yield quota exhausted');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    ensureOpen(); // cancelled/stale continuation must not resume
+    cooperativeYields += 1;
+  });
   const sleep_ms = new WebAssembly.Suspending(async n => {
     ensureOpen();
     const ms = checkInt(n, 0, 1000, 'sleep duration');
@@ -109,7 +121,8 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS } = {}) {
     return await task.promise;
   });
   return {
-    imports: Object.freeze({ sleep_ms, barrier, task_start, task_await }),
+    imports: Object.freeze({ sleep_ms, barrier, task_start, task_await, cooperate }),
+    get cooperativeYields() { return cooperativeYields; },
     bind(wasm) { if (instance) throw Error('E_ASYNC: cannot rebind task scope'); instance = wasm; },
     async runMain() {
       ensureOpen();

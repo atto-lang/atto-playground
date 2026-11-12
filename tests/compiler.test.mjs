@@ -88,21 +88,32 @@ test('every bundled example compiles and behaves as documented', async () => {
     const module = await WebAssembly.compile(compiled.wasm);
     const marker = WebAssembly.Module.customSections(module, 'atto.async');
     assert.equal(marker.length, 1, asyncFile + ' must explicitly declare async ABI');
-    assert.deepEqual(Array.from(new Uint8Array(marker[0])), [1], asyncFile);
+    assert.deepEqual(Array.from(new Uint8Array(marker[0])), [2], asyncFile);
     const imports = WebAssembly.Module.imports(module).map(x => x.module + '.' + x.name);
     assert.ok(imports.some(x => x.startsWith('atto.') && /sleep_ms|task_start/.test(x)), asyncFile);
+    assert.ok(imports.includes('atto.cooperate'), 'every await must import the mandatory cooperative scheduler handoff');
     if (asyncFile === 'task-future.atto') {
       assert.ok(imports.includes('atto.task_await'));
       assert.ok(WebAssembly.Module.exports(module).some(x => x.name === 'task_invoke' && x.kind === 'function'));
     }
   }
-  // `await 42;` parses and type-checks as an already-ready scalar.
-  // No Future handle or JSPI host import should be manufactured.
+  // `await 42;` parses and type-checks but MUST suspend a real Worker
+  // task turn even when the operand is immediately available.
   const immediate = compiler.compile('pub suspends fnc main(): int { await 42; return await 42; }');
   assert.equal(immediate.ok, true, JSON.stringify(immediate.diagnostics));
   const immediateModule = await WebAssembly.compile(immediate.wasm);
-  assert.equal(WebAssembly.Module.customSections(immediateModule, 'atto.async').length, 0);
-  assert.deepEqual(WebAssembly.Module.imports(immediateModule), []);
+  const readyMarker = WebAssembly.Module.customSections(immediateModule, 'atto.async');
+  assert.equal(readyMarker.length, 1);
+  assert.deepEqual(Array.from(new Uint8Array(readyMarker[0])), [2]);
+  assert.deepEqual(WebAssembly.Module.imports(immediateModule).map(x => x.name), ['cooperate']);
+  // v1 is unsafe because ready awaits can skip yielding. Downgraded binaries
+  // must fail at the host ABI gate, never silently run with weaker semantics.
+  const downgraded = immediate.wasm.slice();
+  assert.equal(downgraded[downgraded.length - 1], 2, 'async marker version occupies final custom-section byte');
+  downgraded[downgraded.length - 1] = 1;
+  const { asyncGuestInfo } = await import('../src/task-host.js');
+  assert.throws(() => asyncGuestInfo(new WebAssembly.Module(downgraded)), /E_ASYNC/);
+  assert.equal(asyncGuestInfo(immediateModule).enabled, true);
   const invalidEffect = compiler.compile('pub fnc main(): int { return await 42; }');
   assert.equal(invalidEffect.ok, false);
   assert.match(invalidEffect.diagnostics[0].message, /^E_EFFECT/);

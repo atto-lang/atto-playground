@@ -135,7 +135,8 @@ async function run() {
     }
     status.textContent = 'Completed';
     const actorNote = executed.actors ? ` · ${executed.actors} actor${executed.actors === 1 ? '' : 's'} in dedicated Web Workers` : '';
-    display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms${actorNote}`, 'success');
+    const yieldNote = executed.cooperativeYields ? ` · ${executed.cooperativeYields} cooperative yield(s)` : '';
+    display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms${actorNote}${yieldNote}`, 'success');
   } catch (error) {
     if (generation === runGeneration) {
       status.textContent = 'Worker error';
