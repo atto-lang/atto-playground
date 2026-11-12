@@ -122,6 +122,27 @@ test('every bundled example compiles and behaves as documented', async () => {
   assert.equal(invalidEffect.ok, false);
   assert.match(invalidEffect.diagnostics[0].message, /^E_EFFECT/);
   assert.equal('wasm' in invalidEffect, false);
+  // The parser accepts actor-local suspends receive/mtd only with effect
+  // marks and leaves non-suspending mailbox handlers unchanged.
+  const actorAsyncSource = `define actor A as
+    suspends mtd compute(int n): int { await 42; return n + 1; }
+    suspends receive(ActorMail<int> mail): void {
+      stdio.println(await self.compute(mail.value));
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val a = spawn A();
+    a.send(41);
+    return 0;
+  }`;
+  const actorAsync = compiler.compile(actorAsyncSource);
+  assert.equal(actorAsync.ok, true, JSON.stringify(actorAsync.diagnostics));
+  const actorAsyncModule = await WebAssembly.compile(actorAsync.wasm);
+  assert.deepEqual(Array.from(new Uint8Array(WebAssembly.Module.customSections(actorAsyncModule,'atto.async')[0])),[2]);
+  assert.ok(WebAssembly.Module.imports(actorAsyncModule).some(x => x.name === 'cooperate'));
+  assert.ok(WebAssembly.Module.exports(actorAsyncModule).some(x => x.name === 'actor_receive'));
+  assert.equal(compiler.compile(actorAsyncSource.replace('suspends receive(', 'receive(')).ok,false);
   const actors = compiler.compile(await src('actors.atto'));
   assert.equal(actors.ok, true);
   assert.deepEqual(actorNames(await WebAssembly.compile(actors.wasm)), ['Counter']);

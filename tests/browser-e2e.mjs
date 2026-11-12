@@ -315,6 +315,88 @@ try {
   }
   assert.match(s.output,/2 actors in dedicated Web Workers/);
   ok('two actors run in separate workers with independent state');
+  // Actor A suspends twice while retaining its mailbox lease. Actor B has
+  // another Worker and must finish before A's first slow completion.
+  const slowActor = `define actor Slow as
+  let int sum = 0;
+  suspends mtd delay(int n): int {
+    await rt.sleep(175);
+    return n;
+  }
+  suspends receive(ActorMail<int> mail): void {
+    self.sum = self.sum + (await self.delay(mail.value));
+    stdio.println(self.sum);
+    return;
+  }
+end
+define actor Fast as
+  receive(ActorMail<int> mail): void {
+    stdio.println(900);
+    return;
+  }
+end
+pub fnc main(): int {
+  val slow = spawn Slow();
+  val fast = spawn Fast();
+  slow.send(20);
+  slow.send(22);
+  fast.send(1);
+  return 42;
+}`;
+  await source(slowActor);
+  s=await run('success','main() → 42');
+  assert.deepEqual(s.output.split('\nmain()')[0].trim().split('\n'), ['900','20','42'],
+    'other actor must progress, Slow mailbox order and state cannot reenter while suspended');
+  assert.match(s.output,/2 actors in dedicated Web Workers/);
+  ok('suspended actor releases carrier but retains serial mailbox lease; sibling makes progress');
+
+  const actorTask = `define actor Owner as
+  let int total = 0;
+  suspends receive(ActorMail<int> mail): void {
+    val child = task {
+      await rt.sleep(70);
+      return 20;
+    };
+    val result = await child;
+    self.total = self.total + result + mail.value;
+    stdio.println(self.total);
+    return;
+  }
+end
+pub fnc main(): int {
+  val owner = spawn Owner();
+  owner.send(0);
+  owner.send(2);
+  return 42;
+}`;
+  await source(actorTask);
+  s=await run('success','main() → 42');
+  assert.match(s.output,/^20\n42\nmain\(\) → 42/);
+  assert.match(s.output,/1 actor in dedicated Web Workers/);
+  ok('structured child task executes inside actor-owned Worker; no supervisor guest task execution');
+
+  const staleHandler = `define actor Long as
+  suspends receive(ActorMail<int> mail): void {
+    await rt.sleep(1000);
+    stdio.println(111);
+    return;
+  }
+end
+pub fnc main(): int {
+  val x = spawn Long();
+  x.send(1);
+  return 42;
+}`;
+  await source(staleHandler);
+  await click('run');
+  await poll(async () => (await view())?.runDisabled, 'long actor handler active');
+  await click('stop');
+  await poll(async () => !(await view())?.runDisabled, 'actor handler cancelled');
+  await source('pub fnc main(): int { return 7; }');
+  s=await run('success','main() → 7');
+  assert.doesNotMatch(s.output,/111/, 'cancelled actor output must never appear in later generation');
+  ok('Stop cancels suspended actor and next run fences stale mailbox continuation');
+
   await source('define actor W as\n  receive(ActorMail<int> mail): void {\n    stdio.println(mail.value);\n    stdio.println(mail.value * 9223372036854775807);\n    return;\n  }\nend\npub fnc main(): int {\n  val w = spawn W();\n  w.send(7);\n  w.send(8);\n  return 0;\n}');
   s=await run('error','E_PANIC: integer overflow in actor W#0');
   assert.match(s.output,/^7\nE_PANIC: integer overflow in actor W#0/);
