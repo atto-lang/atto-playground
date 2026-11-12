@@ -12,7 +12,7 @@ const compiler = await createCompiler(await readFile(new URL('../public/atto_com
 
 class FakeWorker {
   static live = 0;
-  constructor() { FakeWorker.live++; this.queue = Promise.resolve(); this.out = { text: '', truncated: false }; }
+  constructor() { FakeWorker.live++; this.queue = Promise.resolve(); this.out = { text: '', truncated: false }; this.generation = 0; }
   postMessage(data) {
     const copy = structuredClone(data);
     this.queue = this.queue.then(() => this.handle(copy));
@@ -27,16 +27,17 @@ class FakeWorker {
         this.instance = await WebAssembly.instantiate(module, host.imports);
         host.bind(this.instance);
         this.type = data.type;
+        this.generation = data.generation;
         this.instance.exports.actor_init(this.type);
-        this.emit({ kind: 'ready' });
+        this.emit({ kind: 'ready', generation: this.generation });
       } else {
         this.out.text = '';
         this.instance.exports.actor_receive(this.type, data.value, BigInt(data.sequence));
-        this.emit({ kind: 'done', sequence: data.sequence, stdout: this.out.text });
+        this.emit({ kind: 'done', generation: this.generation, sequence: data.sequence, stdout: this.out.text });
       }
     } catch (error) {
       this.failed = true;
-      this.emit({ kind: 'fault', message: describePanic(this.instance, error), stdout: this.out.text });
+      this.emit({ kind: 'fault', generation: this.generation, message: describePanic(this.instance, error), stdout: this.out.text });
     }
   }
   terminate() { this.dead = true; FakeWorker.live--; }
@@ -135,4 +136,54 @@ test('guest actor tables are validated', async () => {
   // a module claiming actor exports without the atto.actors table is refused
   const bytes = new Uint8Array([0,97,115,109,1,0,0,0, 1,4,1,96,0,0, 3,2,1,0, 7,14,1,10,97,99,116,111,114,95,105,110,105,116,0,0, 10,4,1,2,0,11]);
   assert.throws(() => actorNames(new WebAssembly.Module(bytes)), /actor table missing/);
+});
+
+test('stale generation acknowledgements and output cannot consume mailbox messages', async () => {
+  class MockWorker {
+    static instances = [];
+    constructor() { this.sent = []; this.dead = false; MockWorker.instances.push(this); }
+    postMessage(x) { this.sent.push(x); }
+    terminate() { this.dead = true; }
+    emit(data) { this.onmessage?.({ data }); }
+  }
+  const out = { text: '', truncated: false };
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]), names: ['A'], out,
+    WorkerImpl: MockWorker, workerUrl: 'mock'
+  });
+  const a = host.spawn(0);
+  assert.equal(a, 0);
+  const worker = MockWorker.instances.at(-1);
+  const generation = worker.sent[0].generation;
+  assert.equal(Number.isInteger(generation), true);
+  assert.ok(generation > 0);
+  host.send(a, 42n);
+  worker.emit({kind:'done',generation:generation - 1,sequence:0,stdout:'STALE\n'});
+  worker.emit({kind:'fault',generation:generation - 1,message:'E_ACTOR: stale fault'});
+  assert.equal(out.text, '');
+  worker.emit({kind:'ready',generation});
+  worker.emit({kind:'done',generation,sequence:0,stdout:'42\n'});
+  assert.equal(await host.drain(), null, 'valid same-generation done drains mailbox');
+  assert.equal(out.text,'42\n','stale stdout must not leak');
+  host.close();
+  assert.equal(worker.dead,true);
+  worker.emit({kind:'done',generation,sequence:1,stdout:'ZOMBIE\n'});
+  assert.equal(out.text,'42\n');
+});
+
+test('cancelling an actor host settles its drain and invalidates its generation', async () => {
+  class MockWorker {
+    constructor() { this.sent=[]; this.dead=false; }
+    postMessage(x) { this.sent.push(x); }
+    terminate() { this.dead=true; }
+  }
+  const out={text:'',truncated:false};
+  const host=createActorHost({wasm:new Uint8Array([0,97,115,109,1,0,0,0]),names:['A'],out,WorkerImpl:MockWorker,workerUrl:'mock'});
+  const a=host.spawn(0);
+  host.send(a,4n);
+  const waiting=host.drain();
+  host.close();
+  assert.equal(await waiting,'E_ACTOR_CANCELLED: actor host closed');
+  assert.throws(()=>host.send(a,1n),/closed/);
+  assert.equal(out.text,'');
 });
