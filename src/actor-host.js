@@ -18,7 +18,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
   const actors = [];
   let nextGeneration = 1;
-  let fault = null, settle = null, closed = false;
+  let fault = null, settle = null, closed = false, drainPromise = null;
 
   const label = a => `${a.name}#${a.ref}`;
   function fail(a, message) {
@@ -37,29 +37,60 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       resolve(fault);
     }
   }
+  function appendValidatedOutput(data) {
+    if (typeof data.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
+    if (data.truncated === true) out.truncated = true;
+  }
+  function hasValidOutput(data) {
+    return (data.stdout === undefined || typeof data.stdout === 'string') &&
+      (data.truncated === undefined || typeof data.truncated === 'boolean');
+  }
   function onMessage(a, data) {
     if (closed || a.failed) return;
-    // A stale worker or callback must never acknowledge a later actor
-    // incarnation, advance a mailbox cursor, or leak its stdout.
-    if (data?.generation !== a.generation) return;
-    if (typeof data?.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
-    if (data?.truncated) out.truncated = true;
-    if (data?.kind === 'fault') {
-      fail(a, typeof data.message === 'string' && /^E_[A-Z_]+: /.test(data.message) ? data.message : 'E_ACTOR: worker fault');
-    } else if (data?.kind === 'done' && data.sequence === a.done && a.done < a.sent) {
+    if (data?.generation !== a.generation) return; // stale actor epoch
+    if (data.kind === 'ready') {
+      if (a.ready || data.stdout !== undefined || data.truncated !== undefined) {
+        fail(a, 'E_ACTOR_PROTOCOL: duplicate or malformed ready');
+      } else {
+        a.ready = true;
+      }
+      return;
+    }
+    if (data.kind === 'done') {
+      // Do NOT accept stdout before validating the complete mailbox ACK.
+      if (!a.ready || !Number.isSafeInteger(data.sequence) ||
+          data.sequence !== a.done || a.done >= a.sent || !hasValidOutput(data)) {
+        fail(a, 'E_ACTOR_PROTOCOL: invalid completion');
+        return;
+      }
+      appendValidatedOutput(data);
       a.done++;
       check();
-    } else if (data?.kind !== 'ready') {
-      fail(a, 'E_ACTOR_PROTOCOL: unexpected actor worker message');
+      return;
     }
+    if (data.kind === 'fault') {
+      // Startup faults are allowed before ready; all other kinds must follow
+      // the authenticated generation and sequence protocol.
+      if (!hasValidOutput(data)) {
+        fail(a, 'E_ACTOR_PROTOCOL: invalid fault output');
+        return;
+      }
+      const message = typeof data.message === 'string' && /^E_[A-Z_]+: /.test(data.message)
+        ? data.message : 'E_ACTOR: worker fault';
+      appendValidatedOutput(data);
+      fail(a, message);
+      return;
+    }
+    fail(a, 'E_ACTOR_PROTOCOL: unexpected actor worker message');
   }
 
   function spawn(type) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
+    if (drainPromise) throw new Error('E_ACTOR: mailbox sealed for drain');
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
-    const a = { ref, type, name: names[type], generation: nextGeneration++, failed: false, sent: 0, done: 0, worker: null };
+    const a = { ref, type, name: names[type], generation: nextGeneration++, ready: false, failed: false, sent: 0, done: 0, worker: null };
     a.worker = new WorkerImpl(workerUrl, { type: 'module' });
     a.worker.onmessage = event => onMessage(a, event.data);
     a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
@@ -72,6 +103,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
+    if (drainPromise) throw new Error('E_ACTOR: mailbox sealed for drain');
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
     if (a.failed) throw new Error('E_ACTOR: target actor has failed');
@@ -85,7 +117,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
    *  fault message. Mail can arrive only from main, so after main returns the
    *  set of messages is final. */
   function drain() {
-    return new Promise(resolve => { settle = resolve; check(); });
+    if (closed) return Promise.resolve('E_ACTOR_CANCELLED: actor host closed');
+    if (!drainPromise) {
+      drainPromise = new Promise(resolve => { settle = resolve; check(); });
+    }
+    return drainPromise;
   }
 
   function close() {
