@@ -2,7 +2,8 @@
 export const STDOUT_LIMIT = 64 * 1024;
 const PRINT = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline', 'print_f64']);
 const ACTOR = new Set(['actor_spawn', 'actor_send']);
-const ALLOWED_EXPORTS = new Set(['main', 'panic_code', 'memory', 'actor_init', 'actor_receive']);
+const ASYNC = new Set(['sleep_ms', 'barrier', 'task_start', 'task_await']);
+const ALLOWED_EXPORTS = new Set(['main', 'panic_code', 'memory', 'actor_init', 'actor_receive', 'task_invoke']);
 export const MAX_ACTOR_TYPES = 256;
 const ACTOR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
@@ -58,6 +59,9 @@ export function actorNames(module) {
     }
     throw new Error('Guest actor table malformed');
   };
+  if (!taskHost && WebAssembly.Module.exports(module).some(e => e.name === 'task_invoke')) {
+    throw new Error('Guest task entrypoint requires an approved async host');
+  }
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const count = leb();
   if (count < 1 || count > MAX_ACTOR_TYPES) throw new Error('Guest actor table size invalid');
@@ -81,9 +85,9 @@ export function actorNames(module) {
  *  `spawn(type)` / `send(ref, value)` capabilities; without it a guest that
  *  calls them traps. Call `bind(instance)` after instantiation so string
  *  printing can read guest memory. */
-export function guestImports(module, out, actors = null) {
+export function guestImports(module, out, actors = null, taskHost = null) {
   for (const imp of WebAssembly.Module.imports(module)) {
-    if (imp.module !== 'atto' || imp.kind !== 'function' || !(PRINT.has(imp.name) || ACTOR.has(imp.name))) {
+    if (imp.module !== 'atto' || imp.kind !== 'function' || !(PRINT.has(imp.name) || ACTOR.has(imp.name) || (taskHost && ASYNC.has(imp.name)))) {
       throw new Error(`Guest import not granted: ${imp.module}.${imp.name}`);
     }
   }
@@ -108,6 +112,7 @@ export function guestImports(module, out, actors = null) {
     print_f64: value => write(formatJavaDouble(value)),
     actor_spawn: actors ? type => actors.spawn(type) : denied,
     actor_send: actors ? (ref, value) => actors.send(ref, value) : denied,
+    ...(taskHost?.imports || {}),
   };
   return { imports: { atto }, bind: instance => { memory = instance.exports.memory ?? null; } };
 }
