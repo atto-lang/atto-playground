@@ -96,6 +96,17 @@ test('every bundled example compiles and behaves as documented', async () => {
       assert.ok(WebAssembly.Module.exports(module).some(x => x.name === 'task_invoke' && x.kind === 'function'));
     }
   }
+  // `await 42;` parses and type-checks as an already-ready scalar.
+  // No Future handle or JSPI host import should be manufactured.
+  const immediate = compiler.compile('pub suspends fnc main(): int { await 42; return await 42; }');
+  assert.equal(immediate.ok, true, JSON.stringify(immediate.diagnostics));
+  const immediateModule = await WebAssembly.compile(immediate.wasm);
+  assert.equal(WebAssembly.Module.customSections(immediateModule, 'atto.async').length, 0);
+  assert.deepEqual(WebAssembly.Module.imports(immediateModule), []);
+  const invalidEffect = compiler.compile('pub fnc main(): int { return await 42; }');
+  assert.equal(invalidEffect.ok, false);
+  assert.match(invalidEffect.diagnostics[0].message, /^E_EFFECT/);
+  assert.equal('wasm' in invalidEffect, false);
   const actors = compiler.compile(await src('actors.atto'));
   assert.equal(actors.ok, true);
   assert.deepEqual(actorNames(await WebAssembly.compile(actors.wasm)), ['Counter']);

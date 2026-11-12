@@ -166,11 +166,16 @@ try {
   const barrier = await run('success', 'main() → 42');
   assert.match(barrier.output, /^main\(\) → 42/);
   ok('two Wasm tasks reach strict two-party barrier: no sequential/eager simulation');
-  await source('pub suspends fnc main(): int { return await 42; }');
-  const invalidAwait = await run('error', 'E_TYPE');
-  assert.equal(invalidAwait.bytes, '—');
-  assert.equal(invalidAwait.downloadDisabled, true);
-  ok('invalid await remains a compile-time type error with zero guest Wasm');
+  await source('pub suspends fnc main(): int { await 42; return await 42; }');
+  const alreadyReady = await run('success', 'main() → 42');
+  assert.match(alreadyReady.output, /main\(\) → 42/);
+  assert.equal(alreadyReady.downloadDisabled, false);
+  ok('await 42; compiles and runs as already-ready scalar without fake suspension');
+  await source('pub fnc main(): int { return await 42; }');
+  const badEffect = await run('error', 'E_EFFECT');
+  assert.equal(badEffect.bytes, '—');
+  assert.equal(badEffect.downloadDisabled, true);
+  ok('await remains an effect error in a non-suspending function');
 
 
   // Custom program library and syntax mirror, both on the real static origin.

@@ -60,3 +60,7 @@ Two built-in Program selections — **suspends / await (Wasm JSPI)** and **task 
 The timer demo suspends and returns/prints 42. The task demo starts two separate capture-free Wasm task bodies, awaits both `Future<int>` results, and returns/prints 42. Browser E2E also proves genuine concurrent suspension via a strict two-party barrier which cannot complete under eager or sequential task execution.
 
 **Scope:** this is an experimental browser-JSPI subset. Browsers without JSPI reject it with `E_ASYNC` rather than synchronously emulating tasks. Only capture-free `task { return int }`, `Future<int>`, `await`, `suspends fnc`, and `rt.sleep`/test barrier are admitted. No `do task`, general closures/borrowing, async actor mailbox, broad IO, non-JSPI CPS fallback, or five-backend parity is claimed. The public Pages website remains separately gated by independent disclosure approval and publishing-source security controls. [Rust compiler PR #50](https://github.com/atto-lang/atto-source.rs/pull/50).
+
+### Already-completed awaits
+
+`await 42;` is valid AttoLang syntax. Within a `suspends fnc`, `await` on an already-available scalar produces its value without a synthetic `Future`, host import, or JSPI suspension. The same expression in a non-`suspends` function still produces `E_EFFECT`; this is an effect restriction, **not** a syntax error. Real pending futures keep their single-consumption and suspension semantics.
