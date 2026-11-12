@@ -187,3 +187,23 @@ test('cancelling an actor host settles its drain and invalidates its generation'
   assert.throws(()=>host.send(a,1n),/closed/);
   assert.equal(out.text,'');
 });
+
+test('actor initialization faults are attributed to the current generation', async () => {
+  class InitFaultWorker {
+    static latest;
+    constructor() { this.mail=[]; InitFaultWorker.latest=this; }
+    postMessage(message) { this.mail.push(message); }
+    terminate() { this.dead=true; }
+    emit(data) { this.onmessage?.({data}); }
+  }
+  const out={text:'',truncated:false};
+  const host=createActorHost({wasm:new Uint8Array([0,97,115,109,1,0,0,0]),names:['Broken'],out,WorkerImpl:InitFaultWorker,workerUrl:'x'});
+  const ref=host.spawn(0);
+  host.send(ref,42n);
+  const generation=InitFaultWorker.latest.mail[0].generation;
+  assert.ok(generation>0);
+  InitFaultWorker.latest.emit({kind:'fault',generation,message:'E_RUNTIME: invalid guest at actor initialization'});
+  assert.equal(await host.drain(),'E_RUNTIME: invalid guest at actor initialization in actor Broken#0');
+  host.close();
+  assert.equal(InitFaultWorker.latest.dead,true);
+});

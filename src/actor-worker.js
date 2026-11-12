@@ -20,10 +20,14 @@ async function handle(data) {
   if (failed) return;
   try {
     if (data?.kind === 'init' && !instance) {
+      // Bind the trusted parent epoch *before* compiling or validating Wasm,
+      // so a startup fault has a matching generation and is never silently
+      // discarded as a stale callback, leaving the supervisor hanging.
+      if (!Number.isSafeInteger(data.generation) || data.generation < 1) throw Error('Invalid actor generation');
+      generation = data.generation;
+      if (!Number.isInteger(data.type) || data.type < 0) throw Error('Invalid actor type');
       const wasm = data.wasm;
       if (!(wasm instanceof Uint8Array) || wasm.byteLength > 1 << 20 || !WebAssembly.validate(wasm)) throw Error('Invalid/oversized guest module');
-      if (!Number.isInteger(data.type) || data.type < 0 ||
-          !Number.isSafeInteger(data.generation) || data.generation < 1) throw Error('Invalid actor initialization');
       const module = await WebAssembly.compile(wasm);
       const async = asyncGuestInfo(module);
       if (async.enabled) taskHost = createAsyncTaskHost(module);
