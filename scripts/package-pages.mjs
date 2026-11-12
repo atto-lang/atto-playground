@@ -43,6 +43,16 @@ export const PAGES_ASSETS = Object.freeze([
   'examples/overflow.atto',
   'examples/primes.atto',
   'examples/strings.atto',
+  'examples/preview/boolean-operators.atto',
+  'examples/preview/generators.atto',
+  'examples/preview/async-iterators.atto',
+  'examples/preview/tasks-async.atto',
+  'examples/preview/match-values.atto',
+  'examples/preview/match-types-is.atto',
+  'examples/preview/use-using-with.atto',
+  'examples/preview/function-pipeline.atto',
+  'examples/preview/actor-pipeline.atto',
+  'examples/preview/supervisor-mailbox.atto',
 ]);
 
 async function checkedFile(root, name) {
