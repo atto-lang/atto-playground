@@ -95,8 +95,9 @@ try {
   const source=text=>js("(()=>{const e=document.querySelector('#source');e.value="+JSON.stringify(text)+";e.dispatchEvent(new Event('input',{bubbles:true}));})()");
   // examples are fetched .atto files, so wait for the editor to be replaced
   const example=async name=>{
+    const expected = await readFile(new URL('../examples/' + name + '.atto', import.meta.url), 'utf8');
     await js("(()=>{const e=document.querySelector('#example');e.value="+JSON.stringify(name)+";e.dispatchEvent(new Event('change',{bubbles:true}));})()");
-    await poll(async()=>{const v=await view();return v?.output?.includes('Source changed') || v?.output?.includes('Syntax preview only.');},'example '+name+' loaded');
+    await poll(async()=> (await view())?.source === expected, 'example '+name+' loaded');
   };
   async function run(kind,expected) {
     await click('run');

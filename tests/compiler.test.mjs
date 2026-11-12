@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createCompiler, verifyCompilerBytes, COMPILER_ABI } from '../src/compiler.js';
+import { PREVIEW_EXAMPLES } from '../src/example-catalog.js';
 import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
 import { guestImports, describePanic, appendCapped, actorNames, STDOUT_LIMIT } from '../src/guest.js';
 
@@ -212,4 +213,14 @@ test('stdout truncation never splits a surrogate pair', () => {
   const exact = { text: '', truncated: false };
   appendCapped(exact, 'a'.repeat(STDOUT_LIMIT));
   assert.deepEqual([exact.text.length, exact.truncated], [STDOUT_LIMIT, false]);
+});
+
+test('pinned compiler rejects all syntax previews without an executable artifact', async () => {
+  for (const id of PREVIEW_EXAMPLES) {
+    const source = await readFile(new URL('../examples/' + id + '.atto', import.meta.url), 'utf8');
+    const result = compiler.compile(source);
+    assert.equal(result.ok, false, id + ' was unexpectedly accepted');
+    assert.equal(result.wasm, undefined, id + ' produced Wasm on rejection');
+    assert.ok(result.diagnostics?.length, id + ' must have a diagnostic');
+  }
 });

@@ -4,12 +4,12 @@
 
 suspends fnc main(): int {
   val values = rx.Observable.from_iter([1, 2, 3, 4, 5]);
-  val even_doubled = values
-    .filter(|n| -> bool { return n % 2 == 0; })
+  val small_doubled = values
+    .filter(|n| -> bool { return n < 4; })
     .map(|n| -> int { return n * 2; })
     .take(2);
 
-  using even_doubled.subscribe(|n| -> { stdio.println(n); }) as subscription {
+  using small_doubled.subscribe(|n| -> { stdio.println(n); }) as subscription {
     await subscription.completed_task();
   }
   return 0;
