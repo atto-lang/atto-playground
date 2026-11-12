@@ -409,7 +409,6 @@ pub fnc main(): int {
   end
   define actor Healthy as
     receive(ActorMail<int> mail): void {
-      awaitThisWouldBeInvalid = 0;
       stdio.println(mail.value);
       return;
     }
@@ -420,10 +419,10 @@ pub fnc main(): int {
     bad.send(7);
     good.send(99);
     return 0;
-  }`.replace('awaitThisWouldBeInvalid = 0;', '');
+  }`;
   await source(siblingAfterFault);
   s=await run('error','E_PANIC: integer overflow in actor Broken#0');
-  assert.match(s.output,/99/, 'healthy sibling finishes queued work even after another actor traps');
+  assert.ok(s.output.split('\n').includes('99'), 'healthy sibling finishes queued work after another actor traps');
   ok('actor trap quarantines only failed actor; healthy sibling still drains its mailbox');
   await source('define actor Spin as\n  receive(ActorMail<int> mail): void {\n    loop { }\n  }\nend\npub fnc main(): int {\n  val s = spawn Spin();\n  s.send(1);\n  return 0;\n}');
   s=await run('error','deadline');
