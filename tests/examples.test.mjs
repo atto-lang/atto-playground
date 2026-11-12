@@ -29,3 +29,21 @@ test('contract accurately describes executable match and preview limitations', a
   assert.doesNotMatch(contract, /- `match`, imports/);
   assert.doesNotMatch(contract, /33 enumerated/);
 });
+
+test('suspends/await and task/future are honest previews with no browser fallback', async () => {
+  const [html, app, picker, a, b] = await Promise.all([
+    read('index.html'), read('src/app.js'), read('src/program-picker.js'),
+    read('examples/suspends-await.atto'), read('examples/task-future.atto'),
+  ]);
+  assert.match(html, /value="suspends-await">suspends \/ await \(preview\)/);
+  assert.match(html, /value="task-future">task \{ \} \/ Future \(preview\)/);
+  assert.match(app, /'suspends-await', 'task-future'/);
+  assert.match(picker, /Syntax preview — async\/task is not compiled yet/);
+  assert.match(a, /suspends fnc delayedAnswer\(\): int/);
+  assert.match(a, /await rt\.sleep\(25\)/);
+  assert.match(b, /val first = task \{/);
+  assert.match(b, /await first \+ await second/);
+  for (const name of ['suspends-await', 'task-future']) {
+    assert.ok(PAGES_ASSETS.includes('examples/' + name + '.atto'), name + ' must be release-allowlisted');
+  }
+});

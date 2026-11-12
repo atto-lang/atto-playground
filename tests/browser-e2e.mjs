@@ -148,6 +148,22 @@ try {
   assert.match(originalFib.output, /^0 1 1 2 3 5 8 13 21 34 \nmain\(\) → 144/);
   ok('both Fibonacci dropdown variants compile and execute real Wasm with identical results');
 
+  // Two *proposed* async/task samples intentionally fail closed: the pinned
+  // Rust/Wasm compiler has no Future/task state machine or suspending host ABI.
+  for (const [name, sourceMarker] of [
+    ['suspends-await', 'suspends fnc delayedAnswer()'],
+    ['task-future', 'val first = task {'],
+  ]) {
+    await example(name);
+    await poll(async () => (await view()).source?.includes(sourceMarker), 'async preview ' + name + ' loaded');
+    assert.match(await js("document.querySelector('#status').textContent"), /Syntax preview/);
+    const preview = await run('error', 'E_UNSUPPORTED');
+    assert.equal(preview.bytes, '—', 'preview never generates guest Wasm: ' + name);
+    assert.equal(preview.downloadDisabled, true, 'cannot download a fake async guest: ' + name);
+  }
+  ok('suspends/await and task/Future examples load as previews and are fail-closed by real compiler');
+
+
   // Custom program library and syntax mirror, both on the real static origin.
   const customSource='fnc main() -> int { return 20 + 22; }';
   await js("(()=>{const e=document.querySelector('#example');e.value='custom:new';e.dispatchEvent(new Event('change',{bubbles:true}));})()");

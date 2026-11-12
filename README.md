@@ -52,3 +52,7 @@ The **Format** and **Check format** actions run the real Rust `oreslang-format` 
 ### Fibonacci pattern matching
 
 The **Fibonacci — pattern matching** option compiles `return match n over ... end` with the actual pinned Rust/Wasm compiler (same guest output as the original if/fi recursion sample, `main() = 144`). The expression-style arms are supported in `return` position; ordinary statement-level `match` also remains supported. Other value-match positions are outside this compiler subset. No JavaScript rewriting is used.
+
+## Task and suspending-call syntax previews
+
+The two Program entries **suspends / await (preview)** and **task { } / Future (preview)** show proposed AttoLang syntax. The current pinned compiler **rejects them** with `E_UNSUPPORTED`; the playground shows diagnostics and cannot download a guest module. This is intentional and tested. The compiler/runtime contract, including native Wasm task frames, structured cancellation and optional browser JSPI interop, is tracked by [atto-source.rs #50](https://github.com/atto-lang/atto-source.rs/pull/50). They are not executable examples until that PR's implementation milestones pass.

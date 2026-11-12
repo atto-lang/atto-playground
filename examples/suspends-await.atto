@@ -1,0 +1,12 @@
+// Syntax preview: this is NOT supported by the current Wasm compiler.
+// The proposed rt.sleep(25) API yields to a timer, without blocking a carrier.
+suspends fnc delayedAnswer(): int {
+  await rt.sleep(25);
+  return 42;
+}
+
+pub suspends fnc main(): int {
+  val result = await delayedAnswer();
+  stdio.println(result);
+  return result;
+}

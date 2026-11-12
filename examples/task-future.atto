@@ -1,0 +1,13 @@
+// Syntax preview: this is NOT supported by the current Wasm compiler.
+// Each task is a structured child and returns Future<int>, not a JS Promise.
+pub suspends fnc main(): int {
+  val first = task {
+    return 20;
+  };
+  val second = task {
+    return 22;
+  };
+  val result = await first + await second;
+  stdio.println(result);
+  return result;
+}

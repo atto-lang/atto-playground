@@ -53,7 +53,7 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
   const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
-  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib-match.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto']);
+  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib-match.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto', 'suspends-await.atto', 'task-future.atto']);
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
   assert.deepEqual([r.value, r.stdout], [42n, 'Hello from WebAssembly!\n42\n']);
@@ -80,6 +80,14 @@ test('every bundled example compiles and behaves as documented', async () => {
   assert.deepEqual([r.value, r.stdout], [0n, 'Hello, Atto!\ntrue\ntrue\ntrue\nstrings compare by content\n']);
   r = await run(await src('match.atto'));
   assert.deepEqual([r.value, r.stdout], [1n, '-\n-\nFizz\n-\nBuzz\nbool arms\n']);
+  // Syntax examples are intentionally preview-only until a real suspending
+  // guest ABI exists. They must fail closed, never produce a misleading Wasm.
+  for (const preview of ['suspends-await.atto', 'task-future.atto']) {
+    const unsupported = compiler.compile(await src(preview));
+    assert.equal(unsupported.ok, false, preview);
+    assert.match(unsupported.diagnostics[0].message, /^E_UNSUPPORTED/, preview);
+    assert.equal('wasm' in unsupported, false, preview);
+  }
   const actors = compiler.compile(await src('actors.atto'));
   assert.equal(actors.ok, true);
   assert.deepEqual(actorNames(await WebAssembly.compile(actors.wasm)), ['Counter']);

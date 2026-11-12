@@ -38,6 +38,8 @@ export const PAGES_ASSETS = Object.freeze([
   'examples/error.atto',
   'examples/fib.atto',
   'examples/fib-match.atto',
+  'examples/suspends-await.atto',
+  'examples/task-future.atto',
   'examples/floats.atto',
   'examples/hello.atto',
   'examples/match.atto',

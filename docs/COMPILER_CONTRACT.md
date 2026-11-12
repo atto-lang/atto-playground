@@ -80,3 +80,11 @@ The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`.
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v2` intentionally permits bounded stdout imports, memory for string literals and objects, and the bounded actor capabilities. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
+
+## Proposed suspension and task examples (NOT executable yet)
+
+The Program dropdown includes **suspends / await (preview)** and **task { } / Future (preview)** as language design illustrations. Both intentionally produce `E_UNSUPPORTED` through the pinned real Rust/Wasm compiler, with zero guest bytes and a disabled Download action. They are **not** transpiled into JavaScript and no JavaScript Promise fallback silently runs user code.
+
+The planned portable implementation is compiler-lowered task continuations plus a task-owned arena and scheduler. `suspends fnc` declares the suspension effect, `await` yields **only the task** until its typed future resolves, and `task { ... }` schedules a structured child and returns `Future<T>`. The proposed `rt.sleep(25)` name in the first sample has not been ratified as a core timer API. The exact grammar and host ABI must be reviewed across backends. See [Wasm task ABI proposal](https://github.com/atto-lang/atto-source.rs/pull/50).
+
+Do **not** advertise either preview as runnable until a versioned Wasm guest scheduler passes real native/Wasm/Chromium execution and cancellation/ownership tests and the corresponding reviewed compiler binary is vendored. No synthetic `await`, blocking worker, or eager sequential execution counts as async.
