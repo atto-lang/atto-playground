@@ -1,5 +1,5 @@
-// Syntax preview: this is NOT supported by the current Wasm compiler.
-// The proposed rt.sleep(25) API yields to a timer, without blocking a carrier.
+// Experimental native Wasm/JSPI implementation; browser JSPI required.
+// rt.sleep(25) yields via approved host timer without blocking a carrier.
 suspends fnc delayedAnswer(): int {
   await rt.sleep(25);
   return 42;

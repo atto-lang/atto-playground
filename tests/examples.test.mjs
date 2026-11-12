@@ -30,15 +30,15 @@ test('contract accurately describes executable match and preview limitations', a
   assert.doesNotMatch(contract, /33 enumerated/);
 });
 
-test('suspends/await and task/future are honest previews with no browser fallback', async () => {
+test('suspends/await and task/future are real Wasm JSPI examples with no source interpreter', async () => {
   const [html, app, picker, a, b] = await Promise.all([
     read('index.html'), read('src/app.js'), read('src/program-picker.js'),
     read('examples/suspends-await.atto'), read('examples/task-future.atto'),
   ]);
-  assert.match(html, /value="suspends-await">suspends \/ await \(preview\)/);
-  assert.match(html, /value="task-future">task \{ \} \/ Future \(preview\)/);
+  assert.match(html, /value="suspends-await">suspends \/ await \(Wasm JSPI\)/);
+  assert.match(html, /value="task-future">task \{ \} \/ Future \(Wasm JSPI\)/);
   assert.match(app, /'suspends-await', 'task-future'/);
-  assert.match(picker, /Syntax preview — async\/task is not compiled yet/);
+  assert.doesNotMatch(picker, /Syntax preview — async\/task is not compiled yet/);
   assert.match(a, /suspends fnc delayedAnswer\(\): int/);
   assert.match(a, /await rt\.sleep\(25\)/);
   assert.match(b, /val first = task \{/);

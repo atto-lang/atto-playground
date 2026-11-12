@@ -77,8 +77,7 @@ export function installProgramPicker({ selector, editor, nameInput, saveButton, 
     controls(false);
     edit(sample);
     currentSelection = value;
-    const previews = new Set(['suspends-await', 'task-future']);
-    tell(previews.has(value) ? 'Syntax preview — async/task is not compiled yet' : 'Ready');
+    tell('Ready');
   }
   selector.addEventListener('change', async () => {
     const requested = selector.value;

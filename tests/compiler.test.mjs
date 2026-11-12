@@ -80,13 +80,21 @@ test('every bundled example compiles and behaves as documented', async () => {
   assert.deepEqual([r.value, r.stdout], [0n, 'Hello, Atto!\ntrue\ntrue\ntrue\nstrings compare by content\n']);
   r = await run(await src('match.atto'));
   assert.deepEqual([r.value, r.stdout], [1n, '-\n-\nFizz\n-\nBuzz\nbool arms\n']);
-  // Syntax examples are intentionally preview-only until a real suspending
-  // guest ABI exists. They must fail closed, never produce a misleading Wasm.
-  for (const preview of ['suspends-await.atto', 'task-future.atto']) {
-    const unsupported = compiler.compile(await src(preview));
-    assert.equal(unsupported.ok, false, preview);
-    assert.match(unsupported.diagnostics[0].message, /^E_UNSUPPORTED/, preview);
-    assert.equal('wasm' in unsupported, false, preview);
+  // Actual compiler-produced modules carry the versioned async import marker.
+  for (const asyncFile of ['suspends-await.atto', 'task-future.atto']) {
+    const compiled = compiler.compile(await src(asyncFile));
+    assert.equal(compiled.ok, true, asyncFile + ': ' + JSON.stringify(compiled.diagnostics));
+    assert.equal(WebAssembly.validate(compiled.wasm), true, asyncFile);
+    const module = await WebAssembly.compile(compiled.wasm);
+    const marker = WebAssembly.Module.customSections(module, 'atto.async');
+    assert.equal(marker.length, 1, asyncFile + ' must explicitly declare async ABI');
+    assert.deepEqual(Array.from(new Uint8Array(marker[0])), [1], asyncFile);
+    const imports = WebAssembly.Module.imports(module).map(x => x.module + '.' + x.name);
+    assert.ok(imports.some(x => x.startsWith('atto.') && /sleep_ms|task_start/.test(x)), asyncFile);
+    if (asyncFile === 'task-future.atto') {
+      assert.ok(imports.includes('atto.task_await'));
+      assert.ok(WebAssembly.Module.exports(module).some(x => x.name === 'task_invoke' && x.kind === 'function'));
+    }
   }
   const actors = compiler.compile(await src('actors.atto'));
   assert.equal(actors.ok, true);

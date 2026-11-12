@@ -53,6 +53,10 @@ The **Format** and **Check format** actions run the real Rust `oreslang-format` 
 
 The **Fibonacci — pattern matching** option compiles `return match n over ... end` with the actual pinned Rust/Wasm compiler (same guest output as the original if/fi recursion sample, `main() = 144`). The expression-style arms are supported in `return` position; ordinary statement-level `match` also remains supported. Other value-match positions are outside this compiler subset. No JavaScript rewriting is used.
 
-## Task and suspending-call syntax previews
+## Experimental native Wasm JSPI task and suspension examples
 
-The two Program entries **suspends / await (preview)** and **task { } / Future (preview)** show proposed AttoLang syntax. The current pinned compiler **rejects them** with `E_UNSUPPORTED`; the playground shows diagnostics and cannot download a guest module. This is intentional and tested. The compiler/runtime contract, including native Wasm task frames, structured cancellation and optional browser JSPI interop, is tracked by [atto-source.rs #50](https://github.com/atto-lang/atto-source.rs/pull/50). They are not executable examples until that PR's implementation milestones pass.
+Two built-in Program selections — **suspends / await (Wasm JSPI)** and **task { } / Future (Wasm JSPI)** — run real AttoLang guest WebAssembly. The Rust source compiler generates `atto.async/1` modules; it does not transpile application code to JavaScript. The approved browser Worker host supplies only a narrow timer, barrier and typed task-future bridge backed by native Wasm JavaScript Promise Integration (JSPI).
+
+The timer demo suspends and returns/prints 42. The task demo starts two separate capture-free Wasm task bodies, awaits both `Future<int>` results, and returns/prints 42. Browser E2E also proves genuine concurrent suspension via a strict two-party barrier which cannot complete under eager or sequential task execution.
+
+**Scope:** this is an experimental browser-JSPI subset. Browsers without JSPI reject it with `E_ASYNC` rather than synchronously emulating tasks. Only capture-free `task { return int }`, `Future<int>`, `await`, `suspends fnc`, and `rt.sleep`/test barrier are admitted. No `do task`, general closures/borrowing, async actor mailbox, broad IO, non-JSPI CPS fallback, or five-backend parity is claimed. The public Pages website remains separately gated by independent disclosure approval and publishing-source security controls. [Rust compiler PR #50](https://github.com/atto-lang/atto-source.rs/pull/50).

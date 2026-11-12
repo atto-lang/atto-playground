@@ -148,20 +148,29 @@ try {
   assert.match(originalFib.output, /^0 1 1 2 3 5 8 13 21 34 \nmain\(\) → 144/);
   ok('both Fibonacci dropdown variants compile and execute real Wasm with identical results');
 
-  // Two *proposed* async/task samples intentionally fail closed: the pinned
-  // Rust/Wasm compiler has no Future/task state machine or suspending host ABI.
+  // Both source files now compile to genuine Wasm with JSPI suspension in
+  // the disposable runner worker. A non-JSPI browser must fail closed.
   for (const [name, sourceMarker] of [
     ['suspends-await', 'suspends fnc delayedAnswer()'],
     ['task-future', 'val first = task {'],
   ]) {
     await example(name);
-    await poll(async () => (await view()).source?.includes(sourceMarker), 'async preview ' + name + ' loaded');
-    assert.match(await js("document.querySelector('#status').textContent"), /Syntax preview/);
-    const preview = await run('error', 'E_UNSUPPORTED');
-    assert.equal(preview.bytes, '—', 'preview never generates guest Wasm: ' + name);
-    assert.equal(preview.downloadDisabled, true, 'cannot download a fake async guest: ' + name);
+    await poll(async () => (await view()).source?.includes(sourceMarker), 'async ' + name + ' loaded');
+    const executed = await run('success', 'main() → 42');
+    assert.match(executed.output, /^42\nmain\(\) → 42/, 'real guest output: ' + name);
+    assert.equal(executed.downloadDisabled, false, 'real downloadable Wasm: ' + name);
+    assert.match(executed.bytes, /\d+ bytes/, 'guest binary size: ' + name);
   }
-  ok('suspends/await and task/Future examples load as previews and are fail-closed by real compiler');
+  ok('suspends/await and task/Future run as actual compiled Wasm via JSPI');
+  await source('pub suspends fnc main(): int { val first = task { await rt.barrier(2); return 20; }; val second = task { await rt.barrier(2); return 22; }; return await first + await second; }');
+  const barrier = await run('success', 'main() → 42');
+  assert.match(barrier.output, /^main\(\) → 42/);
+  ok('two Wasm tasks reach strict two-party barrier: no sequential/eager simulation');
+  await source('pub suspends fnc main(): int { return await 42; }');
+  const invalidAwait = await run('error', 'E_TYPE');
+  assert.equal(invalidAwait.bytes, '—');
+  assert.equal(invalidAwait.downloadDisabled, true);
+  ok('invalid await remains a compile-time type error with zero guest Wasm');
 
 
   // Custom program library and syntax mirror, both on the real static origin.

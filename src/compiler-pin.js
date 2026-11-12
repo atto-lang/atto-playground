@@ -1,5 +1,5 @@
-// Pinned to the Rust/Wasm exact-head compiler receipt; no JS fallback.
-export const COMPILER_SHA256 = '6dd61b3f79a165830319b5f957594109d0347ff10dc37fe4f7987c09b358a54b';
-export const COMPILER_BYTES = 313648;
-export const COMPILER_SOURCE_HEAD = '19d5a0d8cdf9d68096acd38f042eae8838f25084';
-export const COMPILER_SOURCE_TREE = 'a35a6af1d498511eed7c322f2e66a15db4ac3ab7';
+// Pinned to Rust/Wasm exact compiler source head and tree; no JS fallback.
+export const COMPILER_SHA256 = '7fb4f6f71376dddf3ff524de728aa429ee7086336a4fbbe1544e8226a9c3ebf5';
+export const COMPILER_BYTES = 327848;
+export const COMPILER_SOURCE_HEAD = '5218483ada760fa7a2d7f1a3b29f4cfca4b61de6';
+export const COMPILER_SOURCE_TREE = '418360e6dfaa9d9086768888a21bb92086557c14';
