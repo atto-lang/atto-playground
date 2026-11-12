@@ -31,7 +31,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   }
   function check() {
     if (!settle) return;
-    if (actors.every(a => a.failed || a.done === a.sent)) {
+    if (actors.every(a => a.failed || (a.ready && a.done === a.sent))) {
       const resolve = settle;
       settle = null;
       resolve(fault);
