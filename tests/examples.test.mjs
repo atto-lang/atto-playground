@@ -21,3 +21,11 @@ test('pattern matching is a distinct selectable built-in and a release asset', a
   assert.ok(PAGES_ASSETS.includes('examples/fib.atto'));
   assert.ok(PAGES_ASSETS.includes('examples/fib-match.atto'));
 });
+
+test('contract accurately describes executable match and preview limitations', async () => {
+  const contract = await read('docs/COMPILER_CONTRACT.md');
+  assert.match(contract, /return match x over/);
+  assert.match(contract, /general value-position/);
+  assert.doesNotMatch(contract, /- `match`, imports/);
+  assert.doesNotMatch(contract, /33 enumerated/);
+});

@@ -38,8 +38,9 @@ The full rules are in atto-source.rs `README.md`. Each one was checked against t
 Anything else is rejected with an `E_*` diagnostic, and a rejected program produces no artifact. That includes:
 
 - `int / int`, whose result type is undecided (spec S-25), and the removed `%`, `^` and `^^`
-- strings as values, floats and sized integers
-- `match`, imports, lambdas, inheritance, enum payloads and calling actor methods directly
+- unsupported sized integers and string/float **literal patterns** (ordinary string and float values are supported)
+- general value-position `match` expressions (such as `val x = match ...`); return-position `match ... over ... end` and statement matches are supported
+- imports, lambdas, inheritance, enum payloads and calling actor methods directly
 
 ## Compiler ABI v2
 
@@ -74,7 +75,7 @@ Each guest runs in a fresh worker with a 3-second deadline, which ends infinite 
 
 ## Static release and disclosure gate
 
-The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **33 enumerated browser assets** (HTML, CSS, JS including the actor workers, nine examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
+The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **explicitly enumerated browser assets** (HTML, CSS, JS including the actor workers, the 13 built-in examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
 
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
