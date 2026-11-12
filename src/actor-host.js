@@ -53,6 +53,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
         fail(a, 'E_ACTOR_PROTOCOL: duplicate or malformed ready');
       } else {
         a.ready = true;
+        check(); // zero-mail actors may now complete their sealed drain
       }
       return;
     }
