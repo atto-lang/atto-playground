@@ -109,3 +109,13 @@ bridge to a future and define completion, error and cancellation behavior.
 **Release gate:** do not relabel these samples executable until an approved,
 pinned compiler and browser runtime pass real guest execution tests. Packaging
 a text sample does not authorize publication of a new compiler binary.
+
+## Explicit trap panic code (future compiler compatibility)
+
+The guest contract reserves `panic_code=4` for an explicit, terminal
+`trap;` statement. The browser host renders this as
+`E_PANIC: explicit terminal trap`. A trap is not an `Err` value
+and does not become catchable through `Result`. This compatibility
+mapping does **not** imply the currently pinned public compiler can emit
+this code; the proposed compiler implementation requires its own
+review, native/Wasm tests, and authorized binary promotion.

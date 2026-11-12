@@ -224,3 +224,9 @@ test('pinned compiler rejects all syntax previews without an executable artifact
     assert.ok(result.diagnostics?.length, id + ' must have a diagnostic');
   }
 });
+
+test('explicit trap panic code is reported as terminal, never an Err value', () => {
+  const instance = { exports: { panic_code: { value: 4 } } };
+  assert.equal(describePanic(instance, new WebAssembly.RuntimeError('unreachable')),
+    'E_PANIC: explicit terminal trap');
+});
