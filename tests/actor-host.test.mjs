@@ -312,3 +312,44 @@ test('drain is idempotent, seals mailbox and is cancellable even after close', a
   host.close();
   assert.equal(await host.drain(),'E_ACTOR_CANCELLED: actor host closed');
 });
+
+test('an actor with no mail must finish initialization before drain succeeds', async () => {
+  class ManualWorker {
+    static latest;
+    constructor() { this.posts=[]; ManualWorker.latest=this; }
+    postMessage(message) { this.posts.push(message); }
+    terminate() {}
+    emit(message) { this.onmessage?.({ data: message }); }
+  }
+  const out={text:'',truncated:false};
+  const host=createActorHost({wasm:new Uint8Array([0,97,115,109,1,0,0,0]),
+    names:['A'],out,WorkerImpl:ManualWorker,workerUrl:'mock'});
+  host.spawn(0);
+  let drained=false;
+  const waiting=host.drain().then(value=>{drained=true;return value;});
+  await Promise.resolve();
+  assert.equal(drained,false,'empty mailbox must not bypass actor initialization');
+  const generation=ManualWorker.latest.posts[0].generation;
+  ManualWorker.latest.emit({kind:'ready',generation});
+  assert.equal(await waiting,null);
+  host.close();
+});
+
+test('an actor with no mail must report init failure, not false successful drain', async () => {
+  class ManualWorker {
+    static latest;
+    constructor() { this.posts=[]; ManualWorker.latest=this; }
+    postMessage(message) { this.posts.push(message); }
+    terminate() {}
+    emit(message) { this.onmessage?.({ data: message }); }
+  }
+  const out={text:'',truncated:false};
+  const host=createActorHost({wasm:new Uint8Array([0,97,115,109,1,0,0,0]),
+    names:['Bad'],out,WorkerImpl:ManualWorker,workerUrl:'mock'});
+  host.spawn(0);
+  const waiting=host.drain();
+  const generation=ManualWorker.latest.posts[0].generation;
+  ManualWorker.latest.emit({kind:'fault',generation,message:'E_RUNTIME: init failed'});
+  assert.equal(await waiting,'E_RUNTIME: init failed in actor Bad#0');
+  host.close();
+});
