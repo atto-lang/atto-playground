@@ -59,9 +59,6 @@ export function actorNames(module) {
     }
     throw new Error('Guest actor table malformed');
   };
-  if (!taskHost && WebAssembly.Module.exports(module).some(e => e.name === 'task_invoke')) {
-    throw new Error('Guest task entrypoint requires an approved async host');
-  }
   const decoder = new TextDecoder('utf-8', { fatal: true });
   const count = leb();
   if (count < 1 || count > MAX_ACTOR_TYPES) throw new Error('Guest actor table size invalid');
@@ -95,6 +92,9 @@ export function guestImports(module, out, actors = null, taskHost = null) {
   const main = exports.find(e => e.name === 'main');
   if (!main || main.kind !== 'function' || exports.some(e => !ALLOWED_EXPORTS.has(e.name))) {
     throw new Error('Guest export contract mismatch');
+  }
+  if (!taskHost && WebAssembly.Module.exports(module).some(e => e.name === 'task_invoke')) {
+    throw new Error('Guest task entrypoint requires an approved async host');
   }
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let memory = null;
