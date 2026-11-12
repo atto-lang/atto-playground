@@ -233,3 +233,82 @@ test('failed actor is quarantined but already-sent sibling mail completes before
   assert.ok(r.stdout.split('\n').includes('99'),'healthy sibling must complete despite first actor failure');
   assert.equal(FakeWorker.live,0,'all worker resources reclaimed at completion');
 });
+
+test('same-generation malformed ACK cannot inject stdout or advance mailbox', async () => {
+  class MockWorker {
+    static last;
+    constructor() { this.posts = []; MockWorker.last = this; }
+    postMessage(message) { this.posts.push(message); }
+    terminate() {}
+    emit(message) { this.onmessage?.({ data: message }); }
+  }
+  const out = { text: '', truncated: false };
+  const host = createActorHost({ wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['A'], out, WorkerImpl: MockWorker, workerUrl: 'mock' });
+  const ref = host.spawn(0);
+  const worker = MockWorker.last;
+  const gen = worker.posts[0].generation;
+  host.send(ref, 42n);
+  worker.emit({ kind: 'ready', generation: gen });
+  worker.emit({ kind: 'done', generation: gen, sequence: 999, stdout: 'INJECTED\\n', truncated: true });
+  assert.match(await host.drain(), /E_ACTOR_PROTOCOL: invalid completion/);
+  assert.equal(out.text, '');
+  assert.equal(out.truncated, false);
+  worker.emit({ kind: 'done', generation: gen, sequence: 0, stdout: 'LATE\\n' });
+  assert.equal(out.text, '');
+  host.close();
+});
+
+test('unknown messages and duplicated ready cannot inject output', async () => {
+  class MockWorker {
+    static last;
+    constructor() { this.posts = []; MockWorker.last = this; }
+    postMessage(message) { this.posts.push(message); }
+    terminate() {}
+    emit(message) { this.onmessage?.({ data: message }); }
+  }
+  const invalid = [
+    [{ kind: 'arbitrary', stdout: 'INJECTED\\n' }, /unexpected actor worker message/],
+    [{ kind: 'ready', stdout: 'INJECTED\\n' }, /duplicate or malformed ready/],
+    [{ kind: 'ready' }, /duplicate or malformed ready/],
+  ];
+  for (const [data, expected] of invalid) {
+    const out = {text:'', truncated:false};
+    const host = createActorHost({wasm:new Uint8Array([0,97,115,109,1,0,0,0]),
+      names:['A'],out,WorkerImpl:MockWorker,workerUrl:'mock'});
+    const ref = host.spawn(0);
+    const worker = MockWorker.last;
+    const generation = worker.posts[0].generation;
+    host.send(ref,1n);
+    worker.emit({kind:'ready',generation});
+    worker.emit({...data,generation});
+    assert.match(await host.drain(),expected);
+    assert.equal(out.text,'');
+    host.close();
+  }
+});
+
+test('drain is idempotent, seals mailbox and is cancellable even after close', async () => {
+  class MockWorker {
+    static last;
+    constructor() { this.posts=[]; MockWorker.last=this; }
+    postMessage(message) {this.posts.push(message);}
+    terminate(){}
+    emit(message) {this.onmessage?.({data:message});}
+  }
+  const out={text:'',truncated:false};
+  const host=createActorHost({wasm:new Uint8Array([0,97,115,109,1,0,0,0]),
+    names:['A'],out,WorkerImpl:MockWorker,workerUrl:'mock'});
+  const ref=host.spawn(0),worker=MockWorker.last,generation=worker.posts[0].generation;
+  host.send(ref,42n);
+  const d1=host.drain(),d2=host.drain();
+  assert.equal(d1,d2,'must share exactly one outstanding drain');
+  assert.throws(()=>host.send(ref,7n),/sealed for drain/);
+  assert.throws(()=>host.spawn(0),/sealed for drain/);
+  worker.emit({kind:'ready',generation});
+  worker.emit({kind:'done',generation,sequence:0,stdout:'42\\n'});
+  assert.equal(await d1,null);
+  assert.equal(out.text,'42\\n');
+  host.close();
+  assert.equal(await host.drain(),'E_ACTOR_CANCELLED: actor host closed');
+});
