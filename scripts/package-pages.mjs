@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
+import { COMPILER_SHA256, COMPILER_BYTES, COMPILER_SOURCE_HEAD, COMPILER_SOURCE_TREE } from '../src/compiler-pin.js';
 import { FORMATTER_SHA256, FORMATTER_BYTES, FORMATTER_SOURCE_COMMIT } from '../src/formatter-pin.js';
 
 export const PAGES_ASSETS = Object.freeze([
@@ -87,6 +87,12 @@ export async function packagePages({
   const compiler = files.find(x => x.name === 'public/atto_compiler.wasm').bytes;
   const receipt = JSON.parse(files.find(x => x.name === 'public/atto_compiler.receipt.json').bytes.toString('utf8'));
   if (receipt.schema !== 'atto.browser.compiler.vendor.v1' ||
+      receipt.source_repository !== 'atto-lang/atto-source.rs' ||
+      receipt.source_head !== COMPILER_SOURCE_HEAD ||
+      receipt.source_tree !== COMPILER_SOURCE_TREE ||
+      receipt.compiler_abi !== 2 ||
+      receipt.guest_abi !== 'atto.browser.guest.v2' ||
+      receipt.target !== 'wasm32-unknown-unknown' ||
       receipt.compiler_sha256 !== COMPILER_SHA256 ||
       receipt.compiler_bytes !== COMPILER_BYTES ||
       compiler.length !== COMPILER_BYTES ||

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createCompiler, verifyCompilerBytes, COMPILER_ABI } from '../src/compiler.js';
-import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
+import { COMPILER_SHA256, COMPILER_BYTES, COMPILER_SOURCE_HEAD, COMPILER_SOURCE_TREE } from '../src/compiler-pin.js';
 import { guestImports, describePanic, appendCapped, actorNames, STDOUT_LIMIT } from '../src/guest.js';
 
 const compilerBytes = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
@@ -34,7 +34,8 @@ test('vendored compiler matches its provenance receipt', () => {
   assert.equal(createHash('sha256').update(compilerBytes).digest('hex'), receipt.compiler_sha256);
   assert.equal(compilerBytes.length, receipt.compiler_bytes);
   assert.equal(receipt.source_repository, 'atto-lang/atto-source.rs');
-  assert.match(receipt.source_head, /^[0-9a-f]{40}$/);
+  assert.equal(receipt.source_head, COMPILER_SOURCE_HEAD, 'audited compiler source commit must be pinned');
+  assert.equal(receipt.source_tree, COMPILER_SOURCE_TREE, 'audited compiler tree must be pinned');
   assert.equal(receipt.compiler_abi, COMPILER_ABI);
   assert.equal(receipt.guest_abi, 'atto.browser.guest.v2');
 });

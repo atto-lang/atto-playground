@@ -1,8 +1,8 @@
 {
   "schema": "atto.browser.compiler.vendor.v1",
   "source_repository": "atto-lang/atto-source.rs",
-  "source_head": "eab94e380fe4566c4c1f91eda786609bf04973bc",
-  "source_tree": "5d5441db96f40c8c9946ae908de44fcd10e43054",
+  "source_head": "19d5a0d8cdf9d68096acd38f042eae8838f25084",
+  "source_tree": "a35a6af1d498511eed7c322f2e66a15db4ac3ab7",
   "toolchain": "rustc 1.85.1 (4eb161250 2025-03-15)",
   "target": "wasm32-unknown-unknown",
   "compiler_abi": 2,
