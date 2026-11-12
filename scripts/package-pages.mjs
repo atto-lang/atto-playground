@@ -37,9 +37,12 @@ export const PAGES_ASSETS = Object.freeze([
   'examples/enums.atto',
   'examples/error.atto',
   'examples/fib.atto',
+  'examples/floats.atto',
   'examples/hello.atto',
+  'examples/match.atto',
   'examples/overflow.atto',
   'examples/primes.atto',
+  'examples/strings.atto',
 ]);
 
 async function checkedFile(root, name) {
