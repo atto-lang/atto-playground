@@ -22,20 +22,23 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   const label = a => `${a.name}#${a.ref}`;
   function fail(a, message) {
-    if (fault) return;
-    fault = `${message} in actor ${label(a)}`;
+    if (a.failed) return;
+    a.failed = true; // terminal for this actor generation only
+    if (!fault) fault = `${message} in actor ${label(a)}`;
+    // Healthy siblings retain their own Workers/mailboxes and are drained
+    // before reporting a failure. A failed actor must not block their progress.
     check();
   }
   function check() {
     if (!settle) return;
-    if (fault || actors.every(a => a.done === a.sent)) {
+    if (actors.every(a => a.failed || a.done === a.sent)) {
       const resolve = settle;
       settle = null;
       resolve(fault);
     }
   }
   function onMessage(a, data) {
-    if (closed || fault) return;
+    if (closed || a.failed) return;
     // A stale worker or callback must never acknowledge a later actor
     // incarnation, advance a mailbox cursor, or leak its stdout.
     if (data?.generation !== a.generation) return;
@@ -56,7 +59,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
-    const a = { ref, type, name: names[type], generation: nextGeneration++, sent: 0, done: 0, worker: null };
+    const a = { ref, type, name: names[type], generation: nextGeneration++, failed: false, sent: 0, done: 0, worker: null };
     a.worker = new WorkerImpl(workerUrl, { type: 'module' });
     a.worker.onmessage = event => onMessage(a, event.data);
     a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
@@ -71,6 +74,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (closed) throw new Error('E_ACTOR: actor host closed');
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
+    if (a.failed) throw new Error('E_ACTOR: target actor has failed');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     a.worker.postMessage({ kind: 'mail', generation: a.generation, value, sequence: a.sent });

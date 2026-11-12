@@ -401,6 +401,30 @@ pub fnc main(): int {
   s=await run('error','E_PANIC: integer overflow in actor W#0');
   assert.match(s.output,/^7\nE_PANIC: integer overflow in actor W#0/);
   ok('a panicking actor reports its name and keeps earlier output');
+  const siblingAfterFault = `define actor Broken as
+    receive(ActorMail<int> mail): void {
+      stdio.println(mail.value * 9223372036854775807);
+      return;
+    }
+  end
+  define actor Healthy as
+    receive(ActorMail<int> mail): void {
+      awaitThisWouldBeInvalid = 0;
+      stdio.println(mail.value);
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val bad = spawn Broken();
+    val good = spawn Healthy();
+    bad.send(7);
+    good.send(99);
+    return 0;
+  }`.replace('awaitThisWouldBeInvalid = 0;', '');
+  await source(siblingAfterFault);
+  s=await run('error','E_PANIC: integer overflow in actor Broken#0');
+  assert.match(s.output,/99/, 'healthy sibling finishes queued work even after another actor traps');
+  ok('actor trap quarantines only failed actor; healthy sibling still drains its mailbox');
   await source('define actor Spin as\n  receive(ActorMail<int> mail): void {\n    loop { }\n  }\nend\npub fnc main(): int {\n  val s = spawn Spin();\n  s.send(1);\n  return 0;\n}');
   s=await run('error','deadline');
   await example('actors');

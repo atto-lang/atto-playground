@@ -207,3 +207,29 @@ test('actor initialization faults are attributed to the current generation', asy
   host.close();
   assert.equal(InitFaultWorker.latest.dead,true);
 });
+
+test('failed actor is quarantined but already-sent sibling mail completes before fault report', async () => {
+  const r = await runActors(`define actor Broken as
+    receive(ActorMail<int> mail): void {
+      stdio.println(mail.value);
+      stdio.println(mail.value * 9223372036854775807);
+      return;
+    }
+  end
+  define actor Healthy as
+    receive(ActorMail<int> mail): void {
+      stdio.println(mail.value);
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val broken = spawn Broken();
+    val healthy = spawn Healthy();
+    broken.send(7);
+    healthy.send(99);
+    return 0;
+  }`);
+  assert.equal(r.fault, 'E_PANIC: integer overflow in actor Broken#0');
+  assert.ok(r.stdout.split('\n').includes('99'),'healthy sibling must complete despite first actor failure');
+  assert.equal(FakeWorker.live,0,'all worker resources reclaimed at completion');
+});
