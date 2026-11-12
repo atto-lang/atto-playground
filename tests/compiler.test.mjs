@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createCompiler, verifyCompilerBytes, COMPILER_ABI } from '../src/compiler.js';
-import { PREVIEW_EXAMPLES } from '../src/example-catalog.js';
+import { EXAMPLES, PREVIEW_EXAMPLES } from '../src/example-catalog.js';
 import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
 import { guestImports, describePanic, appendCapped, actorNames, STDOUT_LIMIT } from '../src/guest.js';
 
@@ -53,7 +53,7 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
   const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
-  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto']);
+  assert.deepEqual(names, EXAMPLES.map(id => id + '.atto').sort());
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
   assert.deepEqual([r.value, r.stdout], [42n, 'Hello from WebAssembly!\n42\n']);
