@@ -22,9 +22,9 @@ export function asyncGuestInfo(module) {
   if (!usesAsync || hasTaskStart !== hasInvoke || exp.some(x => x.name === 'task_invoke' && x.kind !== 'function')) {
     throw Error('E_ASYNC: inconsistent async imports and task exports');
   }
-  if (WebAssembly.Module.customSections(module, 'atto.actors').length !== 0) {
-    throw Error('E_ASYNC: mixing actor guest imports and JSPI task frames is not yet admitted');
-  }
+  // Actor-enabled modules are allowed only when each actor runs its own
+  // separately-instantiated Wasm module inside a dedicated actor Worker.
+  // The runner's task host never executes actor_receive or actor task bodies.
   return { enabled: true };
 }
 
@@ -38,12 +38,15 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   let closed = false;
   let next = 1;
   let cooperativeYields = 0;
+  let handlerActive = false;
+  let scopeGeneration = 1;
   if (!Number.isInteger(maxYields) || maxYields < 1 || maxYields > 65536) throw Error('E_ASYNC: invalid yield quota');
   const jobs = new Map();
   let pendingBarrier = [];
   const stop = error => {
     if (closed) return;
     closed = true;
+    scopeGeneration++;
     for (const task of jobs.values()) task.reject(error);
     jobs.clear();
     for (const unblock of pendingBarrier) unblock.reject(error);
@@ -63,16 +66,20 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   // or Future must never take a synchronous/Promise.resolve fast path.
   const cooperate = new WebAssembly.Suspending(async () => {
     ensureOpen();
+    const generation = scopeGeneration;
     if (cooperativeYields >= maxYields) throw Error('E_ASYNC: cooperative yield quota exhausted');
     await new Promise(resolve => setTimeout(resolve, 0));
-    ensureOpen(); // cancelled/stale continuation must not resume
+    ensureOpen();
+    if (generation !== scopeGeneration) throw Error('E_ASYNC: stale cooperative continuation');
     cooperativeYields += 1;
   });
   const sleep_ms = new WebAssembly.Suspending(async n => {
     ensureOpen();
     const ms = checkInt(n, 0, 1000, 'sleep duration');
+    const generation = scopeGeneration;
     await new Promise(resolve => setTimeout(resolve, ms));
     ensureOpen();
+    if (generation !== scopeGeneration) throw Error('E_ASYNC: stale timer continuation');
     return 0n;
   });
   const barrier = new WebAssembly.Suspending(async n => {
@@ -124,6 +131,29 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
     imports: Object.freeze({ sleep_ms, barrier, task_start, task_await, cooperate }),
     get cooperativeYields() { return cooperativeYields; },
     bind(wasm) { if (instance) throw Error('E_ASYNC: cannot rebind task scope'); instance = wasm; },
+    async runActorReceive(type, value, sequence) {
+      ensureOpen();
+      if (handlerActive) throw Error('E_ACTOR_REENTRANT: actor mailbox handler already active');
+      if (typeof value !== 'bigint' || typeof sequence !== 'bigint') throw Error('E_ACTOR: invalid mail ABI');
+      if (!Number.isInteger(type) || type < 0) throw Error('E_ACTOR: invalid actor type');
+      if (typeof instance.exports.actor_receive !== 'function') throw Error('E_ACTOR: no receive entrypoint');
+      const generation = scopeGeneration;
+      handlerActive = true;
+      try {
+        const done = await WebAssembly.promising(instance.exports.actor_receive)(type, value, sequence);
+        ensureOpen();
+        if (generation !== scopeGeneration) throw Error('E_ACTOR_STALE: handler resumed after cancellation');
+        if (done !== undefined) throw Error('E_ACTOR: receive unexpectedly returned a value');
+        if (jobs.size) throw Error('E_ACTOR_TASK_LEAK: child task scope not drained');
+      } catch (error) {
+        // Failed handlers poison the actor's task scope: no stale task may
+        // mutate this actor again, and sibling actors retain their Workers.
+        stop(Error('E_ACTOR_CANCELLED: handler failed'));
+        throw error;
+      } finally {
+        handlerActive = false;
+      }
+    },
     async runMain() {
       ensureOpen();
       try {

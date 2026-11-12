@@ -18,7 +18,8 @@ self.onmessage = async ({ data }) => {
     const module = await WebAssembly.compile(wasm);
     const names = actorNames(module);
     const asyncInfo = asyncGuestInfo(module);
-    if (asyncInfo.enabled && names.length) throw Error('E_ASYNC: cannot combine JSPI tasks and actors yet');
+    // Main and each actor bind separate task hosts to independent Wasm
+    // instances and Workers; no actor continuation runs in the runner.
     if (names.length) host = createActorHost({ wasm, names, out });
     if (asyncInfo.enabled) taskHost = createAsyncTaskHost(module);
     const { imports, bind } = guestImports(module, out, host, taskHost);

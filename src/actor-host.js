@@ -17,6 +17,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
   if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
   const actors = [];
+  let nextGeneration = 1;
   let fault = null, settle = null, closed = false;
 
   const label = a => `${a.name}#${a.ref}`;
@@ -35,6 +36,9 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   }
   function onMessage(a, data) {
     if (closed || fault) return;
+    // A stale worker or callback must never acknowledge a later actor
+    // incarnation, advance a mailbox cursor, or leak its stdout.
+    if (data?.generation !== a.generation) return;
     if (typeof data?.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
     if (data?.truncated) out.truncated = true;
     if (data?.kind === 'fault') {
@@ -52,13 +56,13 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
-    const a = { ref, type, name: names[type], sent: 0, done: 0, worker: null };
+    const a = { ref, type, name: names[type], generation: nextGeneration++, sent: 0, done: 0, worker: null };
     a.worker = new WorkerImpl(workerUrl, { type: 'module' });
     a.worker.onmessage = event => onMessage(a, event.data);
     a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
     a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
     // each actor gets a private copy of the module bytes
-    a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type });
+    a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type, generation: a.generation });
     actors.push(a);
     return ref;
   }
@@ -69,7 +73,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
-    a.worker.postMessage({ kind: 'mail', value, sequence: a.sent });
+    a.worker.postMessage({ kind: 'mail', generation: a.generation, value, sequence: a.sent });
     a.sent++;
   }
 
@@ -81,8 +85,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   }
 
   function close() {
+    if (closed) return;
     closed = true;
+    if (settle) { const resolve = settle; settle = null; resolve('E_ACTOR_CANCELLED: actor host closed'); }
     for (const a of actors) {
+      a.generation++;
       a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
       a.worker.terminate();
     }
