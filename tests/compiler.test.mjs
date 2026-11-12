@@ -114,6 +114,10 @@ test('every bundled example compiles and behaves as documented', async () => {
   const { asyncGuestInfo } = await import('../src/task-host.js');
   assert.throws(() => asyncGuestInfo(new WebAssembly.Module(downgraded)), /E_ASYNC/);
   assert.equal(asyncGuestInfo(immediateModule).enabled, true);
+  const actorMethod = compiler.compile('define actor Guard as suspends mtd foo(): int { return await 42; } end');
+  assert.equal(actorMethod.ok, false, 'actor suspends mtd cannot run in the wrong pool');
+  assert.match(actorMethod.diagnostics[0].message, /^E_UNSUPPORTED/);
+  assert.equal('wasm' in actorMethod, false);
   const invalidEffect = compiler.compile('pub fnc main(): int { return await 42; }');
   assert.equal(invalidEffect.ok, false);
   assert.match(invalidEffect.diagnostics[0].message, /^E_EFFECT/);

@@ -160,6 +160,7 @@ try {
     assert.match(executed.output, /^42\nmain\(\) → 42/, 'real guest output: ' + name);
     assert.equal(executed.downloadDisabled, false, 'real downloadable Wasm: ' + name);
     assert.match(executed.bytes, /\d+ bytes/, 'guest binary size: ' + name);
+    assert.match(executed.output, /2 cooperative yield\(s\)/, 'every await yields, including already-resolved task handles: ' + name);
   }
   ok('suspends/await and task/Future run as actual compiled Wasm via JSPI');
   await source('pub suspends fnc main(): int { val first = task { await rt.barrier(2); return 20; }; val second = task { await rt.barrier(2); return 22; }; return await first + await second; }');
@@ -172,6 +173,18 @@ try {
   assert.equal(alreadyReady.downloadDisabled, false);
   assert.match(alreadyReady.output, /2 cooperative yield\(s\)/, 'two immediate await sites must actually release worker carrier');
   ok('await 42; always yields twice to the Worker scheduler before returning 42');
+  for (const [kind, program] of [
+    ['bool', 'pub suspends fnc main(): int { val ready = await true; if ready then return 42; fi return 0; }'],
+    ['float', 'pub suspends fnc main(): int { val ready: float = await 1.5; if ready > 1.0 then return 42; fi return 0; }'],
+    ['string', 'pub suspends fnc main(): int { val ready = await "hello"; if ready eq "hello" then return 42; fi return 0; }'],
+    ['nested', 'pub suspends fnc main(): int { return await (await 42); }'],
+  ]) {
+    await source(program);
+    const result = await run('success', 'main() → 42');
+    const count = kind === 'nested' ? 2 : 1;
+    assert.match(result.output, new RegExp(count + ' cooperative yield\\(s\\)'), kind + ' loses value or does not suspend');
+  }
+  ok('bool, float, string and nested immediate awaits all survive genuine JSPI stack suspension');
   await source('pub define class Worker as pub suspends mtd answer(): int { await 21; return await 42; } end pub suspends fnc main(): int { val worker = new Worker(); return await worker.answer(); }');
   const classAwait = await run('success', 'main() → 42');
   assert.match(classAwait.output, /3 cooperative yield\(s\)/, 'suspends mtd and its caller must cooperatively yield');
