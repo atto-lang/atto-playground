@@ -6,7 +6,7 @@ const KEYWORDS = new Set(('pub private define fnc routine class actor module str
   'final val const let mut return if then elif elseif else fi while do done for loop break continue ' +
   'match switch select over on when default end async await spawn defer recover try catch throw raise panic ' +
   'extends implements as new static suspend trap shared untrusted type where').split(' '));
-const TYPES = new Set('int bool boolean void string String Symbol Result Option Error float double'.split(' '));
+const TYPES = new Set('int bool boolean void string String Symbol Result Option Error float f64 double ActorRef ActorMail'.split(' '));
 const LITERALS = new Set('true false null none nil'.split(' '));
 const HYPHEN_KEYWORDS = ['critical-read', 'critical-write', 'nb-select', 'transform-pipe'];
 export function tokenizeAtto(source) {
@@ -43,7 +43,7 @@ export function tokenizeAtto(source) {
       }
     }
     if (special) continue;
-    const number = /^(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9_]+)?)/.exec(text.slice(i));
+    const number = /^(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?)/.exec(text.slice(i));
     if (number) { add('number', i + number[0].length); continue; }
     const id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i));
     if (id) {

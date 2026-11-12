@@ -139,14 +139,14 @@ try {
   const matchFib = await poll(async () => { const s = await view(); return s.source?.includes('return match n over') ? s : null; }, 'match Fibonacci loaded');
   assert.equal(await js("document.querySelector('#example').value"), 'fib-match');
   assert.match(matchFib.source, /return match n over[\s\S]*default ->[\s\S]*,\s+end\s*\n}/);
-  const rejectedMatch = await run('error', 'E_');
-  assert.equal(rejectedMatch.bytes, '—', 'unsupported match emits no Wasm');
-  assert.equal(rejectedMatch.downloadDisabled, true);
+  const matchedRun = await run('success', 'main() → 144');
+  assert.match(matchedRun.output, /^0 1 1 2 3 5 8 13 21 34 \nmain\(\) → 144/);
+  assert.equal(matchedRun.downloadDisabled, false);
   await example('fib');
   await poll(async () => (await view()).source?.includes('if n < 2 then'), 'conditional Fibonacci reloaded');
   const originalFib = await run('success', 'main() → 144');
   assert.match(originalFib.output, /^0 1 1 2 3 5 8 13 21 34 \nmain\(\) → 144/);
-  ok('Fibonacci dropdown variants remain separate; match/end preview fails closed and original runs');
+  ok('both Fibonacci dropdown variants compile and execute real Wasm with identical results');
 
   // Custom program library and syntax mirror, both on the real static origin.
   const customSource='fnc main() -> int { return 20 + 22; }';
@@ -223,7 +223,7 @@ try {
   assert.equal(s.downloadDisabled,true);
   ok('syntax error rejected in UI');
   await source('define class N as\n  pub int v: 1\nend\nfnc main() -> int {\n  let t = 0;\n  for (let i = 0; i < 1000000; i++) {\n    val n = new N();\n    t = t + n.v;\n  }\n  return t;\n}');
-  s=await run('error','E_PANIC: object heap exhausted');
+  s=await run('error','E_PANIC: heap exhausted');
   assert.match(s.bytes,/^\d+ bytes$/);
   ok('runtime panic distinguished from compile error');
   await example('classes');
@@ -234,6 +234,21 @@ try {
   s=await run('success','main() → 7');
   assert.match(s.output,/^green after 7 changes\nmain\(\) → 7/);
   ok('define enum values compare and flow through functions');
+  await example('floats');
+  s=await run('success','main() → 18');
+  assert.match(s.output,/^12\.566370614359172\n3\.5\n0\.30000000000000004\n1\.0E7\nInfinity\n1477\.8918800354004\nmain\(\) → 18/);
+  ok('float example prints exactly what the Java reference prints');
+  await example('strings');
+  s=await run('success','main() → 0');
+  assert.match(s.output,/^Hello, Atto!\ntrue\ntrue\ntrue\nstrings compare by content\nmain\(\) → 0/);
+  ok('string values: join, trim, members, content equality and ordering');
+  await example('match');
+  s=await run('success','main() → 1');
+  assert.match(s.output,/^-\n-\nFizz\n-\nBuzz\nbool arms\nmain\(\) → 1/);
+  ok('match over/on and legacy arms with bindings execute in order');
+  await source('pub fnc main(): int {\n  let s: string = "0123456789abcdef";\n  loop {\n    s = s + s;\n  }\n}');
+  s=await run('error','E_PANIC: heap exhausted');
+  ok('runaway string concatenation hits the bounded heap, not the browser');
   await example('actors');
   s=await run('success','main() → 0');
   assert.match(s.output,/^main sent 5 messages\n1\n3\n6\n10\n15\nmain\(\) → 0/);

@@ -1,12 +1,12 @@
 {
   "schema": "atto.browser.compiler.vendor.v1",
   "source_repository": "atto-lang/atto-source.rs",
-  "source_head": "865c835c7f343a2bb00b5b73a6010825f57be794",
-  "source_tree": "6520a246849366dfdeb77eaba24956f56dc18713",
+  "source_head": "47a69cc890a7e908472882d05f9656ca2f547686",
+  "source_tree": "af08767c93c247d52d4652cf8c371dfe5727d8d3",
   "toolchain": "rustc 1.85.1 (4eb161250 2025-03-15)",
   "target": "wasm32-unknown-unknown",
   "compiler_abi": 2,
   "guest_abi": "atto.browser.guest.v2",
-  "compiler_sha256": "b7c5e86d8b25a67cc1ea3200b08e088c4022b9d9f8599ba7b87b1253f6822860",
-  "compiler_bytes": 253921
+  "compiler_sha256": "6dd61b3f79a165830319b5f957594109d0347ff10dc37fe4f7987c09b358a54b",
+  "compiler_bytes": 313648
 }

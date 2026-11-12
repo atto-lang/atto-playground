@@ -16,7 +16,7 @@ test('conditional Fibonacci remains intact and match variant terminates with end
 
 test('pattern matching is a distinct selectable built-in and a release asset', async () => {
   const [html, app] = await Promise.all([read('index.html'), read('src/app.js')]);
-  assert.match(html, /<option value="fib">Recursion<\/option><option value="fib-match">Fibonacci — pattern matching \(preview\)<\/option>/);
+  assert.match(html, /<option value="fib">Recursion<\/option><option value="fib-match">Fibonacci — pattern matching <\/option>/);
   assert.match(app, /'hello', 'fib', 'fib-match', 'primes'/);
   assert.ok(PAGES_ASSETS.includes('examples/fib.atto'));
   assert.ok(PAGES_ASSETS.includes('examples/fib-match.atto'));
