@@ -1,5 +1,5 @@
-// Pinned to audited Rust/Wasm exact source head/tree; no JS source fallback.
-export const COMPILER_SHA256 = '3d3d501820b5b887086c35c294690214265f1d82e08a4f5c001e6e99b65c574f';
-export const COMPILER_BYTES = 333215;
-export const COMPILER_SOURCE_HEAD = '04c6bf3b86278d259fc9147580aa400aeb936350';
-export const COMPILER_SOURCE_TREE = 'd90feee932dff18db05594a62d3d426830199583';
+// Exact Rust/Wasm actor-suspension source head/tree, pinned by digest.
+export const COMPILER_SHA256 = '045fa8ed23349f5188fb7ada739ae9d6f1542451da55e2d9189a7b336966a395';
+export const COMPILER_BYTES = 334351;
+export const COMPILER_SOURCE_HEAD = '181d4164f255922c5ce992a2416331f7f4476d99';
+export const COMPILER_SOURCE_TREE = 'e34745b3efb1cbf34103588b54b3fed893453e1a';
