@@ -102,7 +102,7 @@ test('many cancellation/ACK orderings do not resurrect a closed epoch',async()=>
     const ref=host.spawn(0),worker=ManualWorker.instances[0];
     host.send(ref,BigInt(iteration));
     const pending=host.drain();
-    worker.emit({kind:'ready',generation:worker.epoch-1});
+    worker.emit({kind:'ready',generation:worker.epoch+1});
     if(iteration%3===0){
       host.close();
       worker.emit({kind:'ready',generation:worker.epoch});
@@ -111,7 +111,7 @@ test('many cancellation/ACK orderings do not resurrect a closed epoch',async()=>
       assert.equal(out.text,'');
     }else{
       worker.emit({kind:'ready',generation:worker.epoch});
-      worker.emit({kind:'done',generation:worker.epoch-1,sequence:0,stdout:'STALE'});
+      worker.emit({kind:'done',generation:worker.epoch+1,sequence:0,stdout:'STALE'});
       worker.emit({kind:'done',generation:worker.epoch,sequence:0,stdout:'ok'});
       assert.equal(await pending,null);
       assert.equal(out.text,'ok');

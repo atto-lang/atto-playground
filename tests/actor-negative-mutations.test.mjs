@@ -79,7 +79,7 @@ async function securityProbe(factory,mutation) {
   }
   if(mutation === 'missing generation gate'){
     w.emit({kind:'ready',generation});
-    w.emit({kind:'done',generation:generation-1,sequence:0,stdout:'POISON\\n'});
+    w.emit({kind:'done',generation:generation+1,sequence:0,stdout:'POISON\\n'});
     w.emit({kind:'done',generation,sequence:0,stdout:'SAFE\\n'});
     const fault=await host.drain();
     host.close();

@@ -138,7 +138,7 @@ test('guest actor tables are validated', async () => {
   assert.throws(() => actorNames(new WebAssembly.Module(bytes)), /actor table missing/);
 });
 
-test('stale generation acknowledgements and output cannot consume mailbox messages', async () => {
+test('out-of-epoch acknowledgements and output cannot consume mailbox messages', async () => {
   class MockWorker {
     static instances = [];
     constructor() { this.sent = []; this.dead = false; MockWorker.instances.push(this); }
@@ -158,8 +158,8 @@ test('stale generation acknowledgements and output cannot consume mailbox messag
   assert.equal(Number.isInteger(generation), true);
   assert.ok(generation > 0);
   host.send(a, 42n);
-  worker.emit({kind:'done',generation:generation - 1,sequence:0,stdout:'STALE\n'});
-  worker.emit({kind:'fault',generation:generation - 1,message:'E_ACTOR: stale fault'});
+  worker.emit({kind:'done',generation:generation + 1,sequence:0,stdout:'STALE\n'});
+  worker.emit({kind:'fault',generation:generation + 1,message:'E_ACTOR: stale fault'});
   assert.equal(out.text, '');
   worker.emit({kind:'ready',generation});
   worker.emit({kind:'done',generation,sequence:0,stdout:'42\n'});
