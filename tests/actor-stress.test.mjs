@@ -92,7 +92,7 @@ test('seeded FIFO/fairness stress: 8 seeds, 16 competing actors and 128 mail per
     const host = createActorHost({wasm, names:['Counter'], out, WorkerImpl, workerUrl:'mock'});
     const actors = Array.from({length: MAX_ACTORS}, () => host.spawn(0));
     const next = Array.from({length: MAX_ACTORS}, () => 0);
-    const random = prng(seed ^ 0xa5314);
+    const random = prng((seed ^ 0xa5314) >>> 0); // JS bitwise XOR is signed
     const countPerActor = 128;
     // Randomized input interleaving while the Workers are actively scheduled.
     for (let k = 0; k < countPerActor * MAX_ACTORS; k++) {

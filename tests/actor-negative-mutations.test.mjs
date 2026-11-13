@@ -54,6 +54,9 @@ async function securityProbe(factory,mutation) {
   }
   if(mutation === 'missing ready gate'){
     w.emit({kind:'done',generation,sequence:0,stdout:'POISON\\n'});
+    // The mutant waits for ready even after admitting a forged pre-ready
+    // completion. Send ready to distinguish false success from pending drain.
+    w.emit({kind:'ready',generation});
   } else {
     w.emit({kind:'ready',generation});
     w.emit({kind:'done',generation,sequence:999,stdout:'POISON\\n'});
