@@ -193,8 +193,12 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (settle) { const resolve = settle; settle = null; resolve('E_ACTOR_CANCELLED: actor host closed'); }
     for (const a of actors) {
       a.generation++;
-      a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
-      a.worker.terminate();
+      const worker = a.worker;
+      a.worker = null;
+      if (worker) {
+        worker.onmessage = worker.onerror = worker.onmessageerror = null;
+        worker.terminate();
+      }
     }
   }
 
