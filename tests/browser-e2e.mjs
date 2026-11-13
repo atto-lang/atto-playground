@@ -375,6 +375,42 @@ pub fnc main(): int {
   assert.match(s.output,/1 actor in dedicated Web Workers/);
   ok('structured child task executes inside actor-owned Worker; no supervisor guest task execution');
 
+  // Real Chromium/JSPI contention: 48 immediate awaits are mandatory
+  // suspension points while this actor's mailbox remains non-reentrant.
+  const cooperativeBurst = `define actor Bursty as
+    let int count = 0;
+    suspends receive(ActorMail<int> mail): void {
+      await 42;
+      self.count = self.count + 1;
+      stdio.println(mail.sequence * 1000 + self.count);
+      return;
+    }
+  end
+  define actor Peer as
+    receive(ActorMail<int> mail): void {
+      stdio.println(900);
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val burst = spawn Bursty();
+    val peer = spawn Peer();
+    for (let i = 0; i < 48; i++) {
+      burst.send(1);
+    }
+    peer.send(1);
+    return 42;
+  }`;
+  await source(cooperativeBurst);
+  s = await run('success','main() → 42');
+  const burstLines=s.output.split('\\nmain()')[0].trim().split('\\n').map(Number);
+  const cleanBurst=burstLines.filter(x=>x!==900);
+  assert.ok(burstLines.includes(900),'sibling actor completes under burst contention');
+  assert.deepEqual(cleanBurst,Array.from({length:48},(_,i)=>i*1000+i+1),
+    '48 suspended mailboxes must resume in FIFO order without duplication or loss');
+  assert.match(s.output,/2 actors in dedicated Web Workers/);
+  ok('real Chromium: 48 immediate awaits preserve actor FIFO and sibling progress');
+
   const staleHandler = `define actor Long as
   suspends receive(ActorMail<int> mail): void {
     await rt.sleep(1000);
