@@ -27,6 +27,7 @@ export function createTenantActorHost({ module, names, out }) {
   let fault = null;
   let closed = false;
   let draining = false;
+  let admissionClosed = false;
 
   function label(a) { return `${a.name}#${a.ref}`; }
   function flush(a) {
@@ -58,6 +59,7 @@ export function createTenantActorHost({ module, names, out }) {
 
   function spawn(type) {
     if (closed) throw new Error('E_ACTOR: tenant closed');
+    if (admissionClosed) throw new Error('E_ACTOR: spawn admission closed after main returned');
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
 
@@ -87,8 +89,10 @@ export function createTenantActorHost({ module, names, out }) {
 
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: tenant closed');
+    if (admissionClosed) throw new Error('E_ACTOR: mailbox admission closed after main returned');
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
+    if (a.failed) throw new Error(fault || 'E_ACTOR_DEAD: target actor terminated');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) {
       throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     }
@@ -107,11 +111,14 @@ export function createTenantActorHost({ module, names, out }) {
     if (closed) throw new Error('E_ACTOR: tenant closed');
     if (draining) throw new Error('E_ACTOR_PROTOCOL: concurrent drains');
     draining = true;
+    admissionClosed = true;
     let steps = 0;
     try {
       while (true) {
+        if (closed) return 'E_ACTOR: tenant closed';
         let progressed = false;
         for (const a of actors) {
+          if (closed) return 'E_ACTOR: tenant closed';
           // A recoverable actor trap marks only that actor failed; healthy
           // siblings still drain before the tenant reports the first fault.
           if (a.failed || a.head >= a.mailbox.length) continue;
