@@ -22,7 +22,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   const label = a => `${a.name}#${a.ref}`;
   function fail(a, message) {
-    if (a.failed) return;
+    if (closed || a.failed) return;
     a.failed = true; // terminal for this actor generation only
     a.failureMessage = `${message} in actor ${label(a)}`;
     if (!fault) fault = a.failureMessage;
@@ -135,7 +135,13 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     const ref = actors.length;
     const a = { ref, type, name: names[type], generation: nextGeneration++,
       ready: false, failed: false, failureMessage: null, sent: 0, done: 0, worker: null };
-    launch(a);
+    try {
+      launch(a);
+    } catch (error) {
+      // launch() already revoked the callbacks and terminated any Worker.
+      // Never admit a failed actor or consume an ActorRef.
+      throw new Error('E_ACTOR_START: failed to initialize actor worker', {cause:error});
+    }
     actors.push(a);
     return ref;
   }
@@ -181,7 +187,14 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (a.failed) throw new Error('E_ACTOR: target actor has failed');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
-    a.worker.postMessage({ kind: 'mail', generation: a.generation, value, sequence: a.sent });
+    try {
+      a.worker.postMessage({ kind: 'mail', generation: a.generation, value, sequence: a.sent });
+    } catch (error) {
+      // A failed transport send was never committed. Quarantine this actor
+      // immediately; its siblings keep draining under their own leases.
+      fail(a, 'E_ACTOR_TRANSPORT: mailbox delivery failed');
+      throw new Error('E_ACTOR_TRANSPORT: mailbox delivery failed', {cause:error});
+    }
     a.sent++;
   }
 
