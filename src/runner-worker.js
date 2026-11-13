@@ -1,3 +1,4 @@
+import { requireGuestAbiV2 } from './actor-abi-version.js';
 /* Executes one guest module (contract atto.browser.guest.v2) in a fresh,
  * disposable worker. The parent enforces the wall-clock deadline by
  * terminating this worker, including all tenant-local actor instances.
@@ -16,6 +17,7 @@ self.onmessage = async ({ data }) => {
     if (wasm.byteLength > 1 << 20 || !WebAssembly.validate(wasm)) throw new Error('Invalid/oversized guest module');
     admitWasm32Memory(wasm); // preflight before any guest memory exists
     const module = await WebAssembly.compile(wasm);
+    requireGuestAbiV2(module);
     const names = actorNames(module);
     if (names.length) host = createTenantActorHost({ module, names, out });
     const { imports, bind } = guestImports(module, out, host);
