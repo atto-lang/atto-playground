@@ -16,8 +16,13 @@ const asStandalone = src => src.replace(
 const mutations = [
   {
     label:'missing generation gate',
-    needle:'if (data?.generation !== a.generation) return;',
+    needle:'if (data.generation !== a.generation) return;',
     replacement:'if (false /* mutated away generation fence */) return;',
+  },
+  {
+    label:'missing generation validation',
+    needle:'if (!Number.isSafeInteger(data?.generation) || data.generation < 1) {',
+    replacement:'if (false /* mutation removes malformed generation validation */) {',
   },
   {
     label:'missing sequence gate',
@@ -64,6 +69,14 @@ async function securityProbe(factory,mutation) {
     host.close();
     return fault===null && out.text==='SAFE\\n';
   }
+  if(mutation === 'missing generation validation'){
+    w.emit({kind:'ready',generation:'invalid'});
+    w.emit({kind:'ready',generation});
+    w.emit({kind:'done',generation,sequence:0,stdout:'POISON\\n'});
+    const fault=await host.drain();
+    host.close();
+    return /^E_ACTOR_PROTOCOL: missing or invalid generation/.test(fault||'') && out.text==='';
+  }
   if(mutation === 'missing generation gate'){
     w.emit({kind:'ready',generation});
     w.emit({kind:'done',generation:generation-1,sequence:0,stdout:'POISON\\n'});
@@ -86,7 +99,7 @@ async function securityProbe(factory,mutation) {
   return /^E_ACTOR_PROTOCOL: /.test(fault||'') && out.text==='';
 }
 
-test('four protocol/lifecycle mutants are killed by the unmodified invariant probes',async()=>{
+test('five protocol/lifecycle mutants are killed by the unmodified invariant probes',async()=>{
   const folder=await mkdtemp(join(tmpdir(),'atto-actor-mutants-'));
   try {
     for (let i=0;i<mutations.length;i++){

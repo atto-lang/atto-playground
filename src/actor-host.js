@@ -57,7 +57,13 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   }
   function onMessage(a, data) {
     if (closed || a.failed) return;
-    if (data?.generation !== a.generation) return; // stale actor epoch
+    // Malformed generation is a broken protocol frame, not an old epoch.
+    // Quarantine immediately rather than letting the mailbox drain hang.
+    if (!Number.isSafeInteger(data?.generation) || data.generation < 1) {
+      fail(a, 'E_ACTOR_PROTOCOL: missing or invalid generation');
+      return;
+    }
+    if (data.generation !== a.generation) return; // stale actor epoch
     if (data.kind === 'ready') {
       if (a.ready || data.stdout !== undefined || data.truncated !== undefined) {
         fail(a, 'E_ACTOR_PROTOCOL: duplicate or malformed ready');
