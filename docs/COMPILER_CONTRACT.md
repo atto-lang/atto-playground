@@ -79,3 +79,10 @@ The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`.
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v2` intentionally permits bounded stdout imports, memory for string literals and objects, and the bounded actor capabilities. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
+
+
+## Tenant memory admission (v2)
+
+`src/wasm-memory-admission.js` parses the verified guest Wasm bytes **before** the first guest instance is constructed. The tenant runner rejects memory64, shared, unbounded and multiple memories, malformed declarations and declared Wasm32 maxima exceeding **16 × 64 KiB pages (1 MiB)**. This matches the pinned v2 class/string heap budget; it is not a configurable actor arena.
+
+Every actor is still a separate Wasm instance with separate globals. A legacy scalar-only actor guest may have **no linear memory at all** until `atto-source.rs#61` is rebuilt and vendored through the compiler receipt gate; the planned updated emitter exports one bounded 64 KiB memory for those actors. There is no compiler-managed suspended stack, actor-local preemption or general `await` support in v2. On a non-yielding Wasm call, only the parent deadline can terminate the entire worker.
