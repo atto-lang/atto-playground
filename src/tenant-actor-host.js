@@ -109,10 +109,11 @@ export function createTenantActorHost({ module, names, out }) {
     draining = true;
     let steps = 0;
     try {
-      while (!fault) {
+      while (true) {
         let progressed = false;
         for (const a of actors) {
-          if (fault) break;
+          // A recoverable actor trap marks only that actor failed; healthy
+          // siblings still drain before the tenant reports the first fault.
           if (a.failed || a.head >= a.mailbox.length) continue;
           progressed = true;
           const { value, sequence } = a.mailbox[a.head++];
@@ -122,7 +123,7 @@ export function createTenantActorHost({ module, names, out }) {
             flush(a);
           } catch (error) {
             failed(a, error);
-            break;
+            continue;
           }
           if (++steps % YIELD_EVERY === 0) {
             await new Promise(resolve => setTimeout(resolve, 0));
