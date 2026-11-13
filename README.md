@@ -50,3 +50,7 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+### Fibonacci pattern matching
+
+The **Fibonacci — pattern matching** option compiles `return match n over ... end` with the actual pinned Rust/Wasm compiler (same guest output as the original if/fi recursion sample, `main() = 144`). The expression-style arms are supported in `return` position; ordinary statement-level `match` also remains supported. Other value-match positions are outside this compiler subset. No JavaScript rewriting is used.

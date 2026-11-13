@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createCompiler, verifyCompilerBytes, COMPILER_ABI } from '../src/compiler.js';
-import { COMPILER_SHA256, COMPILER_BYTES } from '../src/compiler-pin.js';
+import { COMPILER_SHA256, COMPILER_BYTES, COMPILER_SOURCE_HEAD, COMPILER_SOURCE_TREE } from '../src/compiler-pin.js';
 import { guestImports, describePanic, appendCapped, actorNames, STDOUT_LIMIT } from '../src/guest.js';
 
 const compilerBytes = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
@@ -34,7 +34,8 @@ test('vendored compiler matches its provenance receipt', () => {
   assert.equal(createHash('sha256').update(compilerBytes).digest('hex'), receipt.compiler_sha256);
   assert.equal(compilerBytes.length, receipt.compiler_bytes);
   assert.equal(receipt.source_repository, 'atto-lang/atto-source.rs');
-  assert.match(receipt.source_head, /^[0-9a-f]{40}$/);
+  assert.equal(receipt.source_head, COMPILER_SOURCE_HEAD, 'audited compiler source commit must be pinned');
+  assert.equal(receipt.source_tree, COMPILER_SOURCE_TREE, 'audited compiler tree must be pinned');
   assert.equal(receipt.compiler_abi, COMPILER_ABI);
   assert.equal(receipt.guest_abi, 'atto.browser.guest.v2');
 });
@@ -52,12 +53,14 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
   const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
-  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto']);
+  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib-match.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto']);
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
   assert.deepEqual([r.value, r.stdout], [42n, 'Hello from WebAssembly!\n42\n']);
   r = await run(await src('fib.atto'));
   assert.deepEqual([r.value, r.stdout], [144n, '0 1 1 2 3 5 8 13 21 34 \n']);
+  r = await run(await src('fib-match.atto'));
+  assert.deepEqual([r.value, r.stdout], [144n, '0 1 1 2 3 5 8 13 21 34 \n'], 'real match guest Wasm');
   r = await run(await src('primes.atto'));
   assert.deepEqual([r.value, r.stdout], [10n, '2\n3\n5\n7\n11\n13\n17\n19\n23\n29\n']);
   r = await run(await src('conditions.atto'));
