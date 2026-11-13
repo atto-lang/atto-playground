@@ -11,7 +11,7 @@ import { join } from 'node:path';
 
 const profile = await mkdtemp(join(tmpdir(),'atto-jspi-e2e-'));
 const allowed = new Set([
-  'runner-worker.js','actor-abi-version.js','guest.js','tenant-actor-host.js',
+  'runner-worker.js','actor-abi-version.js','guest.js','tenant-actor-host.js','actor-host.js',
   'task-host.js','wasm-memory-admission.js'
 ]);
 const server = createServer(async (req,res)=>{
