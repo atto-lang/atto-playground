@@ -147,3 +147,22 @@ test('restart worker startup exception terminates new Worker and reports fault',
   assert.equal(WorkerImpl.alive,0);
   assert.equal(WorkerImpl.terminated,2);
 });
+
+
+test('actor fault terminates its Worker immediately, without terminating healthy siblings',async()=>{
+  const WorkerImpl=scriptedWorkers();
+  const out={text:'',truncated:false};
+  const host=createActorHost({wasm,names:['A'],out,WorkerImpl,workerUrl:'mock'});
+  const a=host.spawn(0),b=host.spawn(0);
+  const broken=WorkerImpl.instances[0],healthy=WorkerImpl.instances[1];
+  broken.emit({kind:'fault',generation:broken.generation,
+    message:'E_PANIC: actor stack exhausted'});
+  assert.equal(broken.dead,true,'failed actor must stop CPU immediately, before sibling drain');
+  assert.equal(healthy.dead,false,'healthy sibling must remain live');
+  host.send(b,99n);
+  assert.equal(await host.drain(),'E_PANIC: actor stack exhausted in actor A#0');
+  assert.equal(out.text,'99\n','healthy sibling still processes queued mailbox');
+  host.close();
+  assert.equal(WorkerImpl.alive,0);
+  assert.equal(WorkerImpl.terminated,2,'failed worker not double-terminated on close');
+});
