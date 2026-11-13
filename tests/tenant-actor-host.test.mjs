@@ -116,3 +116,29 @@ test('tenant host enforces ref, mailbox, and 64-bit message boundaries', async (
   host.close();
   assert.throws(() => host.spawn(0), /tenant closed/);
 });
+
+test('v2 mailbox and spawn admission close permanently when drain begins', async () => {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const a = host.spawn(0);
+  host.send(a, 1n);
+  assert.equal(await host.drain(), null);
+  assert.throws(() => host.send(a, 2n), /mailbox admission closed/);
+  assert.throws(() => host.spawn(0), /spawn admission closed/);
+  assert.equal(await host.drain(), null, 'second drain must not reopen admissions');
+  host.close();
+});
+
+test('closing during a yield cancels queued Wasm mail instead of resuming dead instances', async () => {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const a = host.spawn(0);
+  for (let i = 0; i < 80; i++) host.send(a, 1n);
+  const draining = host.drain(); // reaches its 64-message yield
+  host.close();
+  assert.equal(await draining, 'E_ACTOR: tenant closed');
+  assert.equal(host.memoryBytes, 0);
+  assert.throws(() => host.send(a, 1n), /tenant closed/);
+});
