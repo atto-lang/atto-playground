@@ -5,7 +5,7 @@ import { installProgramPicker } from './program-picker.js';
 import { mapFormatCaret } from './formatter-runtime.js';
 // Example programs live in /examples as real .atto files; each one is also
 // compiled by the Java reference compiler in the differential test suite.
-const EXAMPLES = ['hello', 'fib', 'primes', 'conditions', 'overflow', 'error', 'classes', 'actors', 'enums', 'floats', 'strings', 'match'];
+const EXAMPLES = ['hello', 'fib', 'fib-match', 'suspends-await', 'task-future', 'primes', 'conditions', 'overflow', 'error', 'classes', 'actors', 'enums', 'floats', 'strings', 'match'];
 const samples = {};
 async function loadSample(name) {
   if (!EXAMPLES.includes(name)) throw new Error('unknown example');
@@ -135,7 +135,8 @@ async function run() {
     }
     status.textContent = 'Completed';
     const actorNote = executed.actors ? ` · ${executed.actors} actor${executed.actors === 1 ? '' : 's'} in dedicated Web Workers` : '';
-    display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms${actorNote}`, 'success');
+    const yieldNote = executed.cooperativeYields ? ` · ${executed.cooperativeYields} cooperative yield(s)` : '';
+    display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms${actorNote}${yieldNote}`, 'success');
   } catch (error) {
     if (generation === runGeneration) {
       status.textContent = 'Worker error';
