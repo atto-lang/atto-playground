@@ -69,7 +69,7 @@ function createScriptedWorkerClass(seed) {
           return;
         }
         this.emit({kind:'done',generation:this.generation,sequence:this.expected,
-          stdout:`${this.actor}:${this.expected}\\n`});
+          stdout:`${this.actor}:${this.expected}\n`});
         this.expected++;
         this.schedule();
       }, delay);
@@ -103,7 +103,7 @@ test('seeded FIFO/fairness stress: 8 seeds, 16 competing actors and 128 mail per
     }
     const fault = await host.drain();
     assert.equal(fault, null, 'seed=' + seed);
-    const parsed = out.text.trim().split('\\n').map(line => line.split(':').map(Number));
+    const parsed = out.text.trim().split('\n').map(line => line.split(':').map(Number));
     assert.equal(parsed.length, MAX_ACTORS * countPerActor, 'every ACK contributes exactly one output');
     const sequences = Array.from({length: MAX_ACTORS}, () => []);
     for (const [ref, seq] of parsed) {
@@ -136,13 +136,13 @@ test('seeded cancellation/recreation fences late ACKs and faults from prior host
     const newHost=createActorHost({wasm,names:['Counter'],out:secondOut,WorkerImpl,workerUrl:'mock'});
     const next=newHost.spawn(0);
     for (let n=0;n<18;n++) newHost.send(next,BigInt(n));
-    staleCallback({data:{kind:'done',generation:oldWorker.generation,sequence:0,stdout:'ZOMBIE\\n'}});
-    staleCallback({data:{kind:'fault',generation:oldWorker.generation,message:'E_ACTOR: zombie fault',stdout:'POISON\\n'}});
+    staleCallback({data:{kind:'done',generation:oldWorker.generation,sequence:0,stdout:'ZOMBIE\n'}});
+    staleCallback({data:{kind:'fault',generation:oldWorker.generation,message:'E_ACTOR: zombie fault',stdout:'POISON\n'}});
     assert.equal(await newHost.drain(),null);
     assert.equal(firstOut.text.includes('ZOMBIE'),false);
     assert.equal(secondOut.text.includes('ZOMBIE'),false);
     assert.equal(secondOut.text.includes('POISON'),false);
-    assert.deepEqual(secondOut.text.trim().split('\\n').map(x=>Number(x.split(':')[1])),
+    assert.deepEqual(secondOut.text.trim().split('\n').map(x=>Number(x.split(':')[1])),
       Array.from({length:18},(_,i)=>i));
     newHost.close();
     assert.equal(WorkerImpl.live,0);
