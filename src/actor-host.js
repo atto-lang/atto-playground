@@ -26,6 +26,15 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     a.failed = true; // terminal for this actor generation only
     a.failureMessage = `${message} in actor ${label(a)}`;
     if (!fault) fault = a.failureMessage;
+    // Quarantine must end the failing actor's actual Worker immediately:
+    // ignoring its ACKs is insufficient if it keeps consuming CPU.
+    // Do not terminate healthy siblings, and never double-terminate on close.
+    const worker = a.worker;
+    a.worker = null;
+    if (worker) {
+      worker.onmessage = worker.onerror = worker.onmessageerror = null;
+      worker.terminate();
+    }
     // Healthy siblings retain their own Workers/mailboxes and are drained
     // before reporting a failure. A failed actor must not block their progress.
     check();
