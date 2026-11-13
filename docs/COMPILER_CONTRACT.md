@@ -63,14 +63,14 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 
 `src/runner-worker.js` runs `main`. When a guest has actors, `src/actor-host.js` grants `actor_spawn` and `actor_send`:
 
-- Each `spawn` starts one dedicated Web Worker (`src/actor-worker.js`) with a private copy of the module. Actor state lives in that instance's globals, so actors share no memory.
-- `send` posts mail with sequence numbers from 0. The actor worker handles mail strictly in order and reports each completion. The host rejects out-of-order or unexpected replies.
+- The runner worker acts as one disposable tenant Worker per execution. Every `spawn` creates a separate `WebAssembly.Instance` from the same compiled `WebAssembly.Module`. Actors have private globals and, when declared by the compiled module, separate private linear memories; no per-actor Worker is created.
+- `send` queues mail with sequence numbers from 0. The tenant runtime drains one message per actor per round-robin pass, preserving each actor's FIFO order and preventing one busy mailbox from starving other completed handlers.
 - Limits: 16 actors per run and 10,000 messages per actor (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`). Actors cannot spawn or send.
 - The run ends when `main` has returned and every mailbox has drained, which matches the Java reference. Output from different actors may interleave in any order.
-- A panicking actor fails the run as `E_PANIC: … in actor Name#n` and stops receiving mail.
-- Stop and the 3-second deadline terminate the runner worker, which ends every actor worker it owns.
+- A trapping actor is marked failed; the tenant continues draining healthy sibling actors, then reports the first fault as `E_RUNTIME` or `E_PANIC` with the actor identity. A non-returning guest call still blocks the tenant Worker until the outer deadline kills it.
+- Stop and the 3-second deadline terminate the runner worker, invalidating every actor instance and mailbox in that tenant.
 
-Each guest runs in a fresh worker with a 3-second deadline, which ends infinite loops. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
+Each guest runs in a fresh tenant worker with a 3-second deadline, which ends infinite loops by killing the *whole tenant*, not just the looping actor. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
 
 ## Static release and disclosure gate
 
