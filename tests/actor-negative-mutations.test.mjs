@@ -29,6 +29,11 @@ const mutations = [
     needle:'!a.ready || !Number.isSafeInteger(data.sequence)',
     replacement:'false /* mutated away ready fence */ || !Number.isSafeInteger(data.sequence)',
   },
+  {
+    label:'missing Worker callback fence',
+    needle:'const current = () => !closed && a.worker === worker && a.generation === generation;',
+    replacement:'const current = () => !closed; /* deliberately no Worker/epoch callback fence */',
+  },
 ];
 
 async function securityProbe(factory,mutation) {
@@ -44,6 +49,21 @@ async function securityProbe(factory,mutation) {
     names:['Counter'],out,WorkerImpl:ManualWorker,workerUrl:'mock'});
   const ref=host.spawn(0),w=ManualWorker.latest,generation=w.posts[0].generation;
   host.send(ref,42n);
+  if(mutation === 'missing Worker callback fence') {
+    w.emit({kind:'ready',generation});
+    const lateCallback=w.onmessage;
+    assert.equal(host.restart(ref),ref);
+    const next=ManualWorker.latest, newGeneration=next.posts[0].generation;
+    next.emit({kind:'ready',generation:newGeneration});
+    host.send(ref,43n);
+    // The old callback fires after replacement and FORGES the new epoch.
+    // Both closure ownership and epoch identity must be checked.
+    lateCallback({data:{kind:'done',generation:newGeneration,sequence:0,stdout:'POISON\\n'}});
+    next.emit({kind:'done',generation:newGeneration,sequence:0,stdout:'SAFE\\n'});
+    const fault=await host.drain();
+    host.close();
+    return fault===null && out.text==='SAFE\\n';
+  }
   if(mutation === 'missing generation gate'){
     w.emit({kind:'ready',generation});
     w.emit({kind:'done',generation:generation-1,sequence:0,stdout:'POISON\\n'});
@@ -66,7 +86,7 @@ async function securityProbe(factory,mutation) {
   return /^E_ACTOR_PROTOCOL: /.test(fault||'') && out.text==='';
 }
 
-test('three protocol-fencing mutants are killed by the unmodified invariant probes',async()=>{
+test('four protocol/lifecycle mutants are killed by the unmodified invariant probes',async()=>{
   const folder=await mkdtemp(join(tmpdir(),'atto-actor-mutants-'));
   try {
     for (let i=0;i<mutations.length;i++){
