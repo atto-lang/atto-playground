@@ -22,8 +22,15 @@ export function asyncGuestInfo(module) {
   if (!usesAsync || hasTaskStart !== hasInvoke || exp.some(x => x.name === 'task_invoke' && x.kind !== 'function')) {
     throw Error('E_ASYNC: inconsistent async imports and task exports');
   }
-  if (WebAssembly.Module.customSections(module, 'atto.actors').length !== 0) {
-    throw Error('E_ASYNC: mixing actor guest imports and JSPI task frames is not yet admitted');
+  // A v2 JSPI stack belongs to this guest Worker, not to an actor's
+  // private instance/arena. Reject capability combinations even when the
+  // actor table is missing or malformed: an unmarked actor import must not
+  // slip through as a normal task import.
+  if (WebAssembly.Module.customSections(module, 'atto.actors').length !== 0 ||
+      WebAssembly.Module.customSections(module, 'atto.pipeline.v1').length !== 0 ||
+      imp.some(x => x.module === 'atto' && ['actor_spawn', 'actor_send', 'actor_link', 'actor_emit'].includes(x.name)) ||
+      exp.some(x => ['actor_init', 'actor_receive', 'actor_resume', 'actor_deliver'].includes(x.name))) {
+    throw Error('E_ASYNC: mixing actor instances or pipelines with JSPI task frames is not admitted');
   }
   return { enabled: true };
 }
