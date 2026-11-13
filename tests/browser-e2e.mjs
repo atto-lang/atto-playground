@@ -403,7 +403,7 @@ pub fnc main(): int {
   }`;
   await source(cooperativeBurst);
   s = await run('success','main() → 42');
-  const burstLines=s.output.split('\\nmain()')[0].trim().split('\\n').map(Number);
+  const burstLines=s.output.split('\nmain()')[0].trim().split('\n').map(Number);
   const cleanBurst=burstLines.filter(x=>x!==900);
   assert.ok(burstLines.includes(900),'sibling actor completes under burst contention');
   assert.deepEqual(cleanBurst,Array.from({length:48},(_,i)=>i*1000+i+1),
