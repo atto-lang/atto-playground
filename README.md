@@ -21,9 +21,11 @@ To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-sour
 - `public/atto_compiler.wasm` and `public/atto_compiler.receipt.json`: the vendored compiler and its provenance.
 - `src/compiler.js`: compiler ABI v2 bridge.
 - `src/compiler-worker.js`: disposable compilation worker with a 3-second deadline.
-- `src/runner-worker.js` and `src/guest.js`: a disposable guest worker. It grants only `atto.print_*`, caps stdout and maps panics to messages.
+- `src/runner-worker.js`, `src/tenant-actor-host.js`, and `src/guest.js`: a disposable tenant guest worker. One compiled module is instantiated per actor, with independent memories/globals, a round-robin mailbox scheduler, bounded stdout, and actor-local trap handling.
 - `examples/*.atto`: the example programs. Each one is checked against the Java reference compiler.
 - `src/app.js` and `index.html`: the static UI, examples, Wasm download and share links.
+
+The current guest ABI is synchronous: `actor_receive` cannot suspend, and a runaway Wasm call cannot be preempted within one tenant Worker. The parent 3-second deadline still terminates the whole tenant; compiler-lowered continuations and instruction budgets are required before declaring arbitrary untrusted actors independently CPU-isolated. A scalar-only actor compiled by the currently pinned compiler may have no linear memory export; the new compiler emits a bounded 64 KiB actor memory (see atto-source.rs PR #61) and must be vendored through the existing provenance gate before this property is guaranteed for all playground actors.
 
 ## Deployment
 
