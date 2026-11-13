@@ -21,10 +21,21 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   let fault = null, settle = null, closed = false, drainPromise = null;
 
   const label = a => `${a.name}#${a.ref}`;
+  function terminateActor(a) {
+    if (a.terminated) return; // exactly once even if close races with failure
+    a.terminated = true;
+    a.generation++; // revoke all callbacks before terminating
+    if (!a.worker) return;
+    a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
+    a.worker.terminate();
+  }
   function fail(a, message) {
-    if (a.failed) return;
+    if (closed || a.failed) return;
     a.failed = true; // terminal for this actor generation only
     if (!fault) fault = `${message} in actor ${label(a)}`;
+    // Quarantine the failing worker NOW, not after healthy siblings drain.
+    // Otherwise a protocol-invalid or trapped worker can keep consuming CPU.
+    terminateActor(a);
     // Healthy siblings retain their own Workers/mailboxes and are drained
     // before reporting a failure. A failed actor must not block their progress.
     check();
@@ -91,13 +102,19 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
-    const a = { ref, type, name: names[type], generation: nextGeneration++, ready: false, failed: false, sent: 0, done: 0, worker: null };
-    a.worker = new WorkerImpl(workerUrl, { type: 'module' });
-    a.worker.onmessage = event => onMessage(a, event.data);
-    a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
-    a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
-    // each actor gets a private copy of the module bytes
-    a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type, generation: a.generation });
+    const a = { ref, type, name: names[type], generation: nextGeneration++, ready: false, failed: false, terminated: false, sent: 0, done: 0, worker: null };
+    try {
+      a.worker = new WorkerImpl(workerUrl, { type: 'module' });
+      a.worker.onmessage = event => onMessage(a, event.data);
+      a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
+      a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
+      // Each actor gets a private copy of the module bytes. Do not admit
+      // the actor into the host until the initialization transfer succeeds.
+      a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type, generation: a.generation });
+    } catch (error) {
+      terminateActor(a); // constructor / structured-clone failure cannot leak
+      throw new Error('E_ACTOR_START: failed to initialize actor worker', { cause: error });
+    }
     actors.push(a);
     return ref;
   }
@@ -110,7 +127,14 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (a.failed) throw new Error('E_ACTOR: target actor has failed');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
-    a.worker.postMessage({ kind: 'mail', generation: a.generation, value, sequence: a.sent });
+    try {
+      a.worker.postMessage({ kind: 'mail', generation: a.generation, value, sequence: a.sent });
+    } catch (error) {
+      // Do not advance the mailbox sequence for an uncommitted send.
+      // Quarantine only this worker; siblings may still complete their mail.
+      fail(a, 'E_ACTOR_TRANSPORT: mailbox delivery failed');
+      throw new Error('E_ACTOR_TRANSPORT: mailbox delivery failed', { cause: error });
+    }
     a.sent++;
   }
 
@@ -129,11 +153,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (closed) return;
     closed = true;
     if (settle) { const resolve = settle; settle = null; resolve('E_ACTOR_CANCELLED: actor host closed'); }
-    for (const a of actors) {
-      a.generation++;
-      a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
-      a.worker.terminate();
-    }
+    for (const a of actors) terminateActor(a);
   }
 
   return { spawn, send, drain, close, get count() { return actors.length; } };

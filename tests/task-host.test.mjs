@@ -86,3 +86,23 @@ test('cooperative yield quota is enforced for ready await sites',async()=>{
   await assert.rejects(host.imports.cooperate(),/yield quota exhausted/);
   host.close();
 });
+
+test('parallel cooperative await admission cannot oversubscribe the yield quota',async()=>{
+  const host=bind({maxYields:1});
+  const accepted=host.imports.cooperate();
+  const rejected=host.imports.cooperate();
+  await assert.rejects(rejected,/yield quota exhausted/);
+  assert.equal(host.cooperativeYields,1,'the in-flight yield already owns its quota slot');
+  await accepted;
+  assert.equal(host.cooperativeYields,1);
+  host.close();
+});
+
+test('cancellation invalidates an already-admitted cooperative suspension',async()=>{
+  const host=bind({maxYields:1});
+  const pending=host.imports.cooperate();
+  host.close();
+  await assert.rejects(pending,/scope closed|stale cooperative continuation/);
+  assert.equal(host.cooperativeYields,1,'a cancelled scope cannot reuse an admitted slot');
+  await assert.rejects(host.imports.cooperate(),/scope closed/);
+});

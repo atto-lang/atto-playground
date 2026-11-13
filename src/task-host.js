@@ -71,11 +71,13 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   const cooperate = new jspi.Suspending(async () => {
     ensureOpen();
     const generation = scopeGeneration;
+    // Reserve the yield slot before suspending. Charging on resume allowed
+    // concurrent awaits to exceed maxYields while both were in flight.
     if (cooperativeYields >= maxYields) throw Error('E_ASYNC: cooperative yield quota exhausted');
+    cooperativeYields += 1;
     await new Promise(resolve => setTimeout(resolve, 0));
     ensureOpen();
     if (generation !== scopeGeneration) throw Error('E_ASYNC: stale cooperative continuation');
-    cooperativeYields += 1;
   });
   const sleep_ms = new jspi.Suspending(async n => {
     ensureOpen();
