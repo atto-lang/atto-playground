@@ -86,3 +86,57 @@ test('cooperative yield quota is enforced for ready await sites',async()=>{
   await assert.rejects(host.imports.cooperate(),/yield quota exhausted/);
   host.close();
 });
+
+test('simultaneous ready awaits reserve quota BEFORE yielding (no concurrent bypass)', async () => {
+  const host=bind({maxYields:3});
+  const attempts=Array.from({length:24},()=>host.imports.cooperate());
+  const results=await Promise.allSettled(attempts);
+  const passed=results.filter(r=>r.status==='fulfilled');
+  const rejected=results.filter(r=>r.status==='rejected');
+  assert.equal(passed.length,3,'only reserved cooperative slots may proceed');
+  assert.equal(rejected.length,21);
+  for(const r of rejected) assert.match(r.reason.message,/yield quota exhausted/);
+  assert.equal(host.cooperativeYields,3,'account exactly the completed scheduled yields');
+  host.close();
+});
+
+test('cancellation while cooperative slots are reserved prevents late continuation', async () => {
+  const host=bind({maxYields:2});
+  const p1=host.imports.cooperate();
+  const p2=host.imports.cooperate();
+  const denied=host.imports.cooperate();
+  const ready=Promise.all([
+    assert.rejects(p1,/scope closed/),
+    assert.rejects(p2,/scope closed/),
+    assert.rejects(denied,/yield quota exhausted/),
+  ]);
+  host.close();
+  await ready;
+  assert.equal(host.cooperativeYields,0,'cancelled awaits must not record completion');
+});
+
+test('randomized consumed Future cancellation keeps task quota and settles once',async t=>{
+  for(const seed of [1,7,29,137,0xc0ffee,0xdeadbeef]) await t.test('seed='+seed,async()=>{
+    let value=seed>>>0;
+    const random=()=>((value=(Math.imul(value,1664525)+1013904223)>>>0));
+    const resolvers=[];
+    const host=bind({maxTasks:8,task_invoke:()=>new Promise(resolve=>resolvers.push(resolve))});
+    const handles=Array.from({length:8},()=>host.imports.task_start(0));
+    const pending=handles.map(h=>host.imports.task_await(h));
+    // Consume all handles before any resolves; no new task can bypass quota.
+    assert.throws(()=>host.imports.task_start(0),/task quota exhausted/);
+    const remaining=[...resolvers];
+    // Microtask scheduling the child call must occur first.
+    await Promise.resolve();
+    while(resolvers.length && random()%3 !== 0) resolvers.pop()(20n);
+    const observed=pending.map(p=>p.then(value=>({ok:true,value}),err=>({ok:false,err})));
+    host.close();
+    for(const resolve of resolvers) resolve(20n);
+    const results=await Promise.all(observed);
+    for(const r of results){
+      if(r.ok)assert.equal(r.value,20n);
+      else assert.match(r.err.message,/scope cancelled|scope closed/);
+    }
+    assert.throws(()=>host.imports.task_start(0),/scope closed/);
+  });
+});
