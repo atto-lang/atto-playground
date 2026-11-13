@@ -310,6 +310,36 @@ try {
   assert.ok(requests.some(r=>r.url.includes('/play/src/tenant-actor-host.js')),'tenant actor scheduler served statically');
   assert.ok(requests.every(r=>r.method==='GET'),'Unexpected server-side submission of code');
   ok('compiler Wasm served as static GET, no source POST');
+  // Execute hand-assembled, valid core Wasm with an actual async/2 JSPI
+  // import in the SAME disposable tenant Worker used for ordinary guests.
+  // The existing pinned compiler still does not generate these functions.
+  const asyncProbe = await js(`(async()=>{
+    const leb=n=>{const a=[];do{let b=n&127;n>>>=7;a.push(n?b|128:b);}while(n);return a;};
+    const name=s=>{const b=[...new TextEncoder().encode(s)];return [...leb(b.length),...b];};
+    const sec=(id,b)=>[id,...leb(b.length),...b];
+    const body=[0,0x42,42,0x10,0,0x0b];
+    const wasm=new Uint8Array([
+      0,97,115,109,1,0,0,0,
+      ...sec(1,[2,0x60,0,0,0x60,0,1,0x7e]),
+      ...sec(2,[1,...name('atto'),...name('cooperate'),0,0]),
+      ...sec(3,[1,1]),
+      ...sec(7,[1,...name('main'),0,1]),
+      ...sec(10,[1,...leb(body.length),...body]),
+      ...sec(0,[...name('atto.async'),2])
+    ]);
+    if(!WebAssembly.validate(wasm))throw Error('invalid JSPI Wasm fixture');
+    const worker=new Worker('/play/src/runner-worker.js',{type:'module'});
+    try{return await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error('JSPI tenant timed out')),3000);
+      worker.onmessage=e=>{clearTimeout(timer);resolve(e.data);};
+      worker.onerror=e=>{clearTimeout(timer);reject(new Error(e.message||'tenant error'));};
+      worker.postMessage({wasm});
+    });}finally{worker.terminate();}
+  })()`);
+  assert.equal(asyncProbe.ok,true,asyncProbe.message);
+  assert.equal(asyncProbe.value,'42');
+  assert.equal(asyncProbe.cooperativeYields,1);
+  ok('JSPI async/2 yields once in the existing tenant Worker without actor scheduling');
   console.log('PASS: '+passed+' real-browser E2E scenarios');
 } finally {
   try {socket?.close();}catch{}
