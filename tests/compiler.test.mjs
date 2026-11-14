@@ -151,6 +151,65 @@ test('verified actor table is authoritative even if a caller supplies forged hos
   }
 });
 
+test('private Symbol guest is isolate-local in two actors with no mailbox export', async () => {
+  const { createTenantActorHost } = await import('../src/tenant-actor-host.js');
+  const { privateSymbolManifest, symbolManifest } = await import('../src/guest.js');
+  const source = [
+    'define pub symbol #ready;',
+    'define symbol #secret;',
+    'define actor Worker as',
+    '  receive(ActorMail<Symbol> mail): void {',
+    '    if #secret eq #secret then stdio.println(7); fi',
+    '    if mail.value eq #ready then stdio.println(8); fi',
+    '    return;',
+    '  }',
+    'end',
+    'pub fnc main(): int {',
+    '  val a = spawn Worker();',
+    '  val b = spawn Worker();',
+    '  a.send(#ready);',
+    '  b.send(#ready);',
+    '  return 42;',
+    '}',
+  ].join('\\n');
+  const result = compiler.compile(source);
+  assert.equal(result.ok,true,JSON.stringify(result.diagnostics));
+  const module = new WebAssembly.Module(result.wasm);
+  assert.deepEqual(symbolManifest(module),['#ready']);
+  assert.deepEqual(privateSymbolManifest(module),['#secret']);
+  const names = actorNames(module);
+  const out = {text:'',truncated:false};
+  const host = createTenantActorHost({module,names,out});
+  assert.equal(host.symbols.get('#secret'),null,'private Symbol is never globally resolvable');
+  assert.equal(host.symbols.hasGuestId(-1n),false,'private guest ordinal is not transportable');
+  const imports = guestImports(module,out,host);
+  const main = new WebAssembly.Instance(module,imports.imports);
+  imports.bind(main);
+  assert.equal(main.exports.main(),42n);
+  assert.equal(host.count,2);
+  assert.throws(()=>host.send(0,-1n),/E_SYMBOL_UNBOUND/);
+  assert.throws(()=>host.send(1,-1n),/E_SYMBOL_UNBOUND/);
+  assert.equal(await host.drain(),null);
+  assert.equal(out.text,'7\\n8\\n7\\n8\\n');
+  host.close();
+});
+
+test('indirect private Symbol mail is still rejected at runtime', async () => {
+  const { createTenantActorHost } = await import('../src/tenant-actor-host.js');
+  const code = 'define pub symbol #ready; define symbol #secret; ' +
+    'define actor W as receive(ActorMail<Symbol> mail): void {return;} end ' +
+    'pub fnc main(): int { val w = spawn W(); const Symbol x = #secret; w.send(x); return 0; }';
+  const compiled = compiler.compile(code);
+  assert.equal(compiled.ok,true,JSON.stringify(compiled.diagnostics));
+  const module = new WebAssembly.Module(compiled.wasm), out={text:'',truncated:false};
+  const host = createTenantActorHost({module,names:actorNames(module),out});
+  const imports = guestImports(module,out,host);
+  const main = new WebAssembly.Instance(module,imports.imports);
+  imports.bind(main);
+  assert.throws(()=>main.exports.main(),/E_SYMBOL_UNBOUND/);
+  host.close();
+});
+
 test('browser compiler rejects undeclared, private, and type-confused Symbols', () => {
   for(const [src,code] of [
     ['pub fnc main(): int { const Symbol x = #not_declared; return 0; }','E_SYMBOL_UNBOUND'],
