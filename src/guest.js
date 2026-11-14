@@ -126,8 +126,17 @@ export function symbolManifest(module) {
       if (!order) order = Math.sign(raw.length - last.length);
       if (order <= 0) throw new Error('E_SYMBOL_ABI: symbols are unsorted or duplicate');
     }
-    const name = decoder.decode(raw);
-    if (!/^#[\p{L}_][\p{L}\p{N}_]*$/u.test(name)) {
+    let name;
+    try {
+      name = decoder.decode(raw);
+    } catch {
+      throw new Error('E_SYMBOL_ABI: invalid UTF-8 symbol spelling');
+    }
+    // Rust's char::is_alphabetic / is_alphanumeric include Unicode
+    // Other_Alphabetic marks and numeric categories beyond General_Category=L.
+    // Use the corresponding Unicode properties or valid compiler output
+    // could be incorrectly rejected at the host admission boundary.
+    if (!/^#[\p{Alphabetic}_][\p{Alphabetic}\p{Number}_]*$/u.test(name)) {
       throw new Error('E_SYMBOL_ABI: invalid symbol spelling');
     }
     last = raw.slice();
