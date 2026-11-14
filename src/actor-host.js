@@ -7,6 +7,7 @@
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
 import { appendCapped } from './guest.js';
+import { createSymbolRegistry } from './symbol-registry.js';
 
 export const MAX_ACTORS = 16;
 export const MAX_MAILBOX = 10_000;
@@ -17,6 +18,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
   if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
   const actors = [];
+  // Supervisor-owned; actors receive handles, never shared mutable guest memory.
+  const symbols = createSymbolRegistry();
   let fault = null, settle = null, closed = false;
 
   const label = a => `${a.name}#${a.ref}`;
@@ -82,11 +85,12 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function close() {
     closed = true;
+    symbols.close();
     for (const a of actors) {
       a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
       a.worker.terminate();
     }
   }
 
-  return { spawn, send, drain, close, get count() { return actors.length; } };
+  return { spawn, send, drain, close, symbols, get count() { return actors.length; } };
 }
