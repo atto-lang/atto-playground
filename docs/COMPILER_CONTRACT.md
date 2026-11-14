@@ -21,25 +21,25 @@ The compiler adds no syntax of its own:
 
 | Area | Admitted |
 | --- | --- |
-| Declarations | `[pub] fnc` / `routine`, `: T` or `-> T`, brace body; parameters `int a`, `int mut a`; arity overloads |
+| Declarations | `define pub symbol #ready;` (static public Symbol), `[pub] fnc` / `routine`, `: T` or `-> T`, brace body; parameters `int a`, `int mut a`; arity overloads |
 | Entry point | zero-argument `main` returning `int` or `void` |
-| Types | `int`, `bool` / `boolean`, `float` / `f64` (binary64), `string` / `String`, `void` |
+| Types | `Symbol` (immutable declared identity), `int`, `bool` / `boolean`, `float` / `f64` (binary64), `string` / `String`, `void` |
 | Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred; immutable `int x = 7;` for `int`, `bool`, `string`, `String` |
 | Control flow | `if … then … elif … else … fi`, brace form closed by `fi`, `while … do … done`, `loop { }`, `for (let i = 0; i < n; i++)`, `break`, `continue`, `match` (legacy arms and canonical `match x over on P -> { } end`; literal, `_`, binding and `Enum.Variant` patterns; guards; exhaustiveness checked) |
 | Expressions | `+ - *` (int, float; an int operand widens), `/` with a float operand, `+` of two strings, `< <= > >=` (numbers; strings in Java `compareTo` order), `eq neq == !=`, `!`, ternary, `,` / `\|` in conditions (both sides are evaluated), `And` / `Or` / `Xor` |
 | Output | `stdio.print` / `stdio.println` of `int`, `bool`, `float` (Java `Double.toString`), strings and objects |
 | Strings | `trim()`, `starts_with`, `ends_with`, `contains_literal`; content `eq` |
 | Classes | `[pub] define class Name as … end`: fields, one `constructor`, private-by-default methods, `pub static fnc` called as `Name.f()`, `new Name(…)`, moves |
-| Actors | `define actor Name as … end`: `let` state, `receive(ActorMail<int\|bool> mail): void`, `spawn Name()`, `ref.send(v)` |
-| Enums | `define enum Name as A B end` (the oreslang-source.llvm v1 design spelling; Java does not parse it yet) |
+| Actors | `define actor Name as … end`: `let` state, `receive(ActorMail<int\|bool\|Symbol> mail): void`, `spawn Name()`, `ref.send(v)` |
+| Symbols | `#ready` literals, `eq`/`neq`, `match ... over on #ready` patterns, `ActorMail<Symbol>` and `send`; public declarations are canonical sorted immutable identities, not pointers or capabilities. |\n| Enums | `define enum Name as A B end` (the oreslang-source.llvm v1 design spelling; Java does not parse it yet) |
 
 The full rules are in atto-source.rs `README.md`. Each one was checked against the Java reference compiler.
 
 Anything else is rejected with an `E_*` diagnostic, and a rejected program produces no artifact. That includes:
 
 - `int / int`, whose result type is undecided (spec S-25), and the removed `%`, `^` and `^^`
-- strings as values, floats and sized integers
-- `match`, imports, lambdas, inheritance, enum payloads and calling actor methods directly
+- sized integers and unsupported scalar/generic type combinations
+- cross-file Symbol imports, private isolate-local Symbol declarations, `#with spaces`, lambdas, inheritance, enum payloads and calling actor methods directly
 
 ## Compiler ABI v2
 
@@ -78,9 +78,42 @@ This is version negotiation and safety hardening, **not** an implementation of r
 
 Each guest runs in a fresh tenant worker with a 3-second deadline, which ends infinite loops by killing the *whole tenant*, not just the looping actor. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
 
+## Static public Symbol identities (first executable guest profile)
+
+The pinned Rust browser compiler source is `atto-lang/atto-source.rs` at the
+`source_head` in `public/atto_compiler.receipt.json`. In the current bounded,
+**same-module** executable profile, the compiler accepts `define pub symbol
+#ready;`, typed `Symbol` variables and functions, `#ready` expressions,
+equality and `match` arms, and `ActorMail<Symbol>`. Symbol operands cannot be
+accidentally treated as `int` or `string`.
+
+The compiler assigns 1-based, lexicographically sorted immutable symbol
+ordinals. It publishes `atto.symbols` (public spellings) and
+`atto.actor_mail` (typed mailbox kinds) as bounded custom WebAssembly sections.
+The host validates those manifests and exposes only an immutable
+compiler-declared public-symbol view to application code, never the mutable
+runtime registry. The supervisor and each isolated actor instance can use the
+same public Symbol identity without sharing any actor heap.
+
+**Security boundary:** numeric Symbol IDs represent identity only, **not**
+authorization, capabilities or transferable heap pointers. The compiler
+rejects undeclared and private symbols in this profile. The host checks typed
+mailbox admission; access to a symbol must not authorize privileged operations
+or bypass import/export validation. Do not accept external arbitrary Wasm
+modules as compiler-attested just because they contain these custom sections.
+Cross-module imports, private actor-local symbols, cross-process intern tables,
+priority supervisor CONTROL routing and native backend parity remain separate
+implementation gates.
+
+The `symbols.atto` built-in example exercises one supervisor sending the same
+`#ready` to two actors with independent Wasm instances. Both actor handlers
+must match the global identity and print `7` without sharing mutable memory.
+The formatter is independently pinned and might not yet support the new Symbol
+syntax; formatting capability is not implied by compiler support.
+
 ## Static release and disclosure gate
 
-The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **33 enumerated browser assets** (HTML, CSS, JS including the actor workers, nine examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
+The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **41 explicitly enumerated browser assets** (HTML, CSS, JS including the actor workers, thirteen `.atto` examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
 
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
