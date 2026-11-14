@@ -12,7 +12,7 @@
  */
 import { appendCapped, describePanic, guestImports, symbolManifest, actorMailKinds } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
-import { createSymbolRegistry } from './symbol-registry.js';
+import { createSymbolRegistry, createPublicSymbolView } from './symbol-registry.js';
 
 const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
@@ -26,10 +26,10 @@ export function createTenantActorHost({ module, names, out }) {
 
   const actors = [];
   // One immutable-identity table for the supervisor and all guest instances.
-  const symbols = createSymbolRegistry();
+  const privateSymbols = createSymbolRegistry();
   const publicSymbols = symbolManifest(module);
   const mailKinds = actorMailKinds(module, names.length, publicSymbols.length);
-  for (const name of publicSymbols) symbols.internGlobal('atto.module', name);
+  const symbols = createPublicSymbolView(privateSymbols, 'atto.module', publicSymbols);
   let fault = null;
   let closed = false;
   let draining = false;
@@ -102,7 +102,7 @@ export function createTenantActorHost({ module, names, out }) {
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) {
       throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     }
-    if (mailKinds[a.type] === 3 && (value < 1n || value > BigInt(publicSymbols.length))) {
+    if (mailKinds[a.type] === 3 && !symbols.hasGuestId(value)) {
       throw new Error('E_SYMBOL_UNBOUND: actor mailbox rejected unknown global Symbol identity');
     }
     if (a.sent >= MAX_MAILBOX) {
@@ -156,7 +156,7 @@ export function createTenantActorHost({ module, names, out }) {
 
   function close() {
     closed = true;
-    symbols.close();
+    privateSymbols.close();
     for (const a of actors) {
       a.mailbox.length = 0;
       a.instance = null;
