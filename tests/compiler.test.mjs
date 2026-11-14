@@ -171,7 +171,7 @@ test('private Symbol guest is isolate-local in two actors with no mailbox export
     '  b.send(#ready);',
     '  return 42;',
     '}',
-  ].join('\\n');
+  ].join('\n');
   const result = compiler.compile(source);
   assert.equal(result.ok,true,JSON.stringify(result.diagnostics));
   const module = new WebAssembly.Module(result.wasm);
@@ -190,7 +190,7 @@ test('private Symbol guest is isolate-local in two actors with no mailbox export
   assert.throws(()=>host.send(0,-1n),/E_SYMBOL_UNBOUND/);
   assert.throws(()=>host.send(1,-1n),/E_SYMBOL_UNBOUND/);
   assert.equal(await host.drain(),null);
-  assert.equal(out.text,'7\\n8\\n7\\n8\\n');
+  assert.equal(out.text,'7\n8\n7\n8\n');
   host.close();
 });
 
