@@ -15,17 +15,49 @@ export const MAX_SYMBOL_BYTES = 1 << 20;
 export const MAX_SYMBOL_KEY_BYTES = 4_096;
 
 const encoder = new TextEncoder();
+export const SUPERVISOR_ISOLATE_ID = 0;
+
+/** Actor refs are zero-based; zero is reserved for the supervisor. */
+export function actorIsolateId(actorRef) {
+  if (!Number.isSafeInteger(actorRef) || actorRef < 0 ||
+      actorRef >= Number.MAX_SAFE_INTEGER) {
+    throw new TypeError('E_SYMBOL_SCOPE: invalid actor reference');
+  }
+  return actorRef + 1;
+}
+
+/** Do not permit ill-formed UTF-16 strings to alias UTF-8 replacement bytes. */
+function requireScalarUnicode(value) {
+  for (const c of value) {
+    const code = c.codePointAt(0);
+    if (code >= 0xd800 && code <= 0xdfff) {
+      throw new TypeError('E_SYMBOL_NAME: unpaired UTF-16 surrogate');
+    }
+  }
+}
+
+function utf8Bytes(value) {
+  // One UTF-16 code unit occupies at least one UTF-8 byte; reject oversized
+  // names before building their allocation-heavy map key.
+  if (value.length > MAX_SYMBOL_KEY_BYTES) {
+    throw new RangeError('E_SYMBOL_LIMIT: symbol intern budget exceeded');
+  }
+  requireScalarUnicode(value);
+  return encoder.encode(value).byteLength;
+}
 
 function requireModule(value) {
   if (typeof value !== 'string' || !value || /[\u0000-\u001f\u007f]/u.test(value)) {
     throw new TypeError('E_SYMBOL_NAME: invalid canonical module name');
   }
+  requireScalarUnicode(value);
 }
 function requireName(value) {
   if (typeof value !== 'string' || value.length < 2 || value[0] !== '#' ||
       /[\u0000-\u001f\u007f]/u.test(value)) {
     throw new TypeError('E_SYMBOL_NAME: expected a #symbol literal');
   }
+  requireScalarUnicode(value);
 }
 function requireOwner(value) {
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -67,15 +99,16 @@ export function createSymbolRegistry({
     requireName(name);
     if (scope === 'local') requireOwner(owner);
 
+    const cost = utf8Bytes(moduleName) + utf8Bytes(name);
+    if (cost > MAX_SYMBOL_KEY_BYTES) {
+      throw new RangeError('E_SYMBOL_LIMIT: symbol intern budget exceeded');
+    }
     // An array-based canonical key avoids ambiguity between punctuation,
     // module names and #with spaces spellings; do not use string hashes as IDs.
     const key = JSON.stringify([scope, scope === 'local' ? owner : null, moduleName, name]);
     const existing = byKey.get(key);
     if (existing) return existing;
-
-    const cost = encoder.encode(moduleName).byteLength + encoder.encode(name).byteLength;
-    if (cost > MAX_SYMBOL_KEY_BYTES || byId.size >= maxSymbols ||
-        cost > maxBytes - bytes) {
+    if (byId.size >= maxSymbols || cost > maxBytes - bytes) {
       throw new RangeError('E_SYMBOL_LIMIT: symbol intern budget exceeded');
     }
 
@@ -102,6 +135,17 @@ export function createSymbolRegistry({
     const symbol = byId.get(handle.id);
     if (symbol.scope === 'local' && symbol.owner !== isolateId) return null;
     return Object.freeze({ scope: symbol.scope, module: symbol.module, name: symbol.name });
+  }
+
+  /** Private symbols must never cross isolate boundaries, even by value. */
+  function canTransport(handle, fromIsolateId, toIsolateId) {
+    requireOpen();
+    requireOwner(fromIsolateId);
+    requireOwner(toIsolateId);
+    if (!isHandle(handle)) return false;
+    const symbol = byId.get(handle.id);
+    return symbol.scope === 'global' ||
+      (symbol.owner === fromIsolateId && fromIsolateId === toIsolateId);
   }
 
   /** Value equality remains correct after postMessage/structuredClone. */
@@ -133,7 +177,7 @@ export function createSymbolRegistry({
     internLocal(isolateId, moduleName, name) {
       return intern('local', isolateId, moduleName, name);
     },
-    same, resolve, globalManifest, close,
+    same, resolve, canTransport, globalManifest, close,
     get count() { return byId.size; },
     get bytes() { return bytes; },
     get registryId() { return registry; },
