@@ -21,7 +21,7 @@ The compiler adds no syntax of its own:
 
 | Area | Admitted |
 | --- | --- |
-| Declarations | `define pub symbol #ready;` (static public Symbol), `[pub] fnc` / `routine`, `: T` or `-> T`, brace body; parameters `int a`, `int mut a`; arity overloads |
+| Declarations | `define pub symbol #ready;` (public) or `define symbol #secret;` (isolate-local private), `[pub] fnc` / `routine`, `: T` or `-> T`, brace body; parameters `int a`, `int mut a`; arity overloads |
 | Entry point | zero-argument `main` returning `int` or `void` |
 | Types | `Symbol` (immutable declared identity), `int`, `bool` / `boolean`, `float` / `f64` (binary64), `string` / `String`, `void` |
 | Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred; immutable `int x = 7;` for `int`, `bool`, `string`, `String` |
@@ -39,7 +39,7 @@ Anything else is rejected with an `E_*` diagnostic, and a rejected program produ
 
 - `int / int`, whose result type is undecided (spec S-25), and the removed `%`, `^` and `^^`
 - sized integers and unsupported scalar/generic type combinations
-- cross-file Symbol imports, private isolate-local Symbol declarations, `#with spaces`, lambdas, inheritance, enum payloads and calling actor methods directly
+- compiled cross-file Symbol imports, `#with spaces`, lambdas, inheritance, enum payloads and calling actor methods directly
 
 ## Compiler ABI v2
 
@@ -87,23 +87,37 @@ The pinned Rust browser compiler source is `atto-lang/atto-source.rs` at the
 equality and `match` arms, and `ActorMail<Symbol>`. Symbol operands cannot be
 accidentally treated as `int` or `string`.
 
-The compiler assigns 1-based, lexicographically sorted immutable symbol
-ordinals. It publishes `atto.symbols` (public spellings) and
-`atto.actor_mail` (typed mailbox kinds) as bounded custom WebAssembly sections.
+The compiler independently sorts public and private spellings. Public symbol guest ordinals are positive **1-based** IDs and private isolate-local ordinals are **negative** 1-based IDs. The compiler publishes `atto.symbols` (public spellings), `atto.private_symbols` (private spellings), and `atto.actor_mail` (typed mailbox kinds) as bounded custom WebAssembly sections. Adding private declarations cannot change public ordinal assignments.
 The host validates those manifests and exposes only an immutable
 compiler-declared public-symbol view to application code, never the mutable
 runtime registry. The supervisor and each isolated actor instance can use the
 same public Symbol identity without sharing any actor heap.
 
 **Security boundary:** numeric Symbol IDs represent identity only, **not**
-authorization, capabilities or transferable heap pointers. The compiler
-rejects undeclared and private symbols in this profile. The host checks typed
-mailbox admission; access to a symbol must not authorize privileged operations
+authorization, capabilities or transferable heap pointers. The compiler rejects undeclared symbols and direct sends of private literals. Private declarations compile and can be compared inside an isolate, but private values may **never** pass a typed `ActorMail<Symbol>` boundary; the host rejects negative private ordinals even when hidden behind local variables. The host checks typed mailbox admission; access to a symbol must not authorize privileged operations
 or bypass import/export validation. Do not accept external arbitrary Wasm
 modules as compiler-attested just because they contain these custom sections.
-Cross-module imports, private actor-local symbols, cross-process intern tables,
-priority supervisor CONTROL routing and native backend parity remain separate
-implementation gates.
+Compiled cross-module imports and guest ordinal relocation, cross-process intern tables, priority supervisor CONTROL routing and native backend parity remain separate implementation gates.
+
+### Host-owned cross-module linking (first phase)
+
+The audited `src/symbol-linker.js` accepts separately compiled Wasm modules,
+assigns canonical identities using `(module_id, exact_symbol_spelling)`,
+and permits an importing module to reference a provider's identity **only**
+when the trusted host/package link plan grants that exact import. Conflicting
+providers, ambiguous names, same-spelling local declarations, private exports,
+duplicate imports and invalid module IDs are rejected. Unrelated modules
+declaring `#ready` remain distinct even though the literal text matches.
+The linker is independent of actor-owned heaps and is closed with its registry.
+
+**This is not guest-level cross-module execution yet.** The current Rust
+browser compiler does not emit fully qualified import relocations and the
+playground still runs one compiled guest module per tenant. A host link grant
+is not evidence that guest source imported a symbol; an eventual compiler
+import manifest plus verified linker fixups must enforce that source boundary.
+Link grants must come from trusted package configuration, never arbitrary
+guest Wasm metadata or an untrusted caller. The exported identity is not a
+permission to send mail or access actor state.
 
 The `symbols.atto` built-in example exercises one supervisor sending the same
 `#ready` to two actors with independent Wasm instances. Both actor handlers
@@ -113,7 +127,7 @@ syntax; formatting capability is not implied by compiler support.
 
 ## Static release and disclosure gate
 
-The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **41 explicitly enumerated browser assets** (HTML, CSS, JS including the actor workers, thirteen `.atto` examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
+The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`. Only the **42 explicitly enumerated browser assets** (HTML, CSS, JS including the actor workers, thirteen `.atto` examples, compiler and formatter receipts and Wasm, and this contract) are shipped. The packager rejects symlinked inputs and staging directories, limits asset sizes, verifies compiler Wasm has no imports, enforces matching pinned digest, receipt and bytes, and emits per-file SHA-256 plus the source commit in `release-manifest.json`. It cannot be pointed at arbitrary source directories.
 
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
