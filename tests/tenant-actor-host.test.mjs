@@ -164,3 +164,35 @@ test('tenant scheduler resolves the public Symbol manifest and rejects bogus mai
   assert.equal(out.text, '1');
   host.close();
 });
+
+test('typed bool and no-receiver mailboxes fail closed in both actor-host backends', async () => {
+  const { createActorHost } = await import('../src/actor-host.js');
+  class StubWorker { postMessage() {} terminate() {} }
+  for (const kind of [0,2]) {
+    const source = new Uint8Array([...actorFixture(), ...section(0, flat(str('atto.actor_mail'), [1,kind]))]);
+    assert.equal(WebAssembly.validate(source), true);
+    const module = new WebAssembly.Module(source);
+    const out = {text:'', truncated:false};
+    const tenant = createTenantActorHost({module,names:['Counter'],out});
+    const worker = createActorHost({wasm:source,names:['Counter'],out,WorkerImpl:StubWorker,workerUrl:'unused'});
+    const ta=tenant.spawn(0), wa=worker.spawn(0);
+    const code=kind===0?/E_ACTOR_NO_RECEIVE/:/E_ACTOR_MAIL_TYPE/;
+    assert.throws(()=>tenant.send(ta,2n),code);
+    assert.throws(()=>worker.send(wa,2n),code);
+    assert.throws(()=>tenant.send(ta,-1n),code);
+    assert.throws(()=>worker.send(wa,-1n),code);
+    if(kind===2){
+      tenant.send(ta,1n);
+      worker.send(wa,1n);
+      tenant.send(ta,0n);
+      worker.send(wa,0n);
+      assert.equal(await tenant.drain(),null);
+      assert.equal(out.text,'12');
+    }else{
+      assert.throws(()=>tenant.send(ta,0n),code);
+      assert.throws(()=>worker.send(wa,0n),code);
+    }
+    tenant.close();
+    worker.close();
+  }
+});
