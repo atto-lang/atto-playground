@@ -122,15 +122,16 @@ test('both actor host lifecycles own independent registries and invalidate them 
   const tenantHost = createTenantActorHost({
     module: new WebAssembly.Module(wasm), names: ['A'], out,
   });
-  const workerReady = workerHost.symbols.internGlobal('events', '#ready');
-  const tenantReady = tenantHost.symbols.internGlobal('events', '#ready');
-  assert.equal(workerHost.symbols.same(workerReady, workerReady), true);
-  assert.equal(workerHost.symbols.same(workerReady, tenantReady), false);
-  assert.equal(tenantHost.symbols.resolve(workerReady, 0), null);
+  assert.equal(workerHost.symbols.get('#ready'), null);
+  assert.equal(tenantHost.symbols.get('#ready'), null);
+  assert.equal(workerHost.symbols.count, 0);
+  assert.equal(tenantHost.symbols.count, 0);
+  assert.equal(typeof workerHost.symbols.internGlobal, 'undefined', 'guests cannot mint global symbols');
+  assert.equal(typeof tenantHost.symbols.internLocal, 'undefined', 'guests cannot mint private symbols');
   workerHost.close();
   tenantHost.close();
-  assert.throws(() => workerHost.symbols.internGlobal('events', '#more'), /E_SYMBOL_CLOSED/);
-  assert.throws(() => tenantHost.symbols.internGlobal('events', '#more'), /E_SYMBOL_CLOSED/);
+  assert.throws(() => workerHost.symbols.resolve({}, 0), /E_SYMBOL_CLOSED/);
+  assert.throws(() => tenantHost.symbols.resolve({}, 0), /E_SYMBOL_CLOSED/);
 });
 
 test('supervisor isolate ID never aliases actor zero and rejects wraparound', () => {
@@ -204,13 +205,52 @@ test('actor host pre-interns declared globals and rejects unknown Symbol mail', 
   const host = createActorHost({ wasm, names: ['Worker'],
     out: {text:'',truncated:false}, WorkerImpl: StubWorker, workerUrl:'unused' });
   assert.equal(host.symbols.count, 2);
-  const ready = host.symbols.internGlobal('atto.module', '#ready');
+  const ready = host.symbols.get('#ready');
   const copied = structuredClone(ready);
   assert.equal(host.symbols.same(ready, copied), true);
+  assert.equal(Object.isFrozen(host.symbols), true);
+  assert.equal(typeof host.symbols.internGlobal, 'undefined');
+  assert.equal(typeof host.symbols.internLocal, 'undefined');
   const worker = host.spawn(0);
   host.send(worker, 1n);
   host.send(worker, 2n);
   assert.throws(() => host.send(worker, 0n), /E_SYMBOL_UNBOUND/);
   assert.throws(() => host.send(worker, 3n), /E_SYMBOL_UNBOUND/);
   host.close();
+});
+
+test('public Symbol view refuses guessed names and private scope leakage', async () => {
+  const { createPublicSymbolView } = await import('../src/symbol-registry.js');
+  const registry = createSymbolRegistry();
+  const names = Object.freeze(['#ready', '#stopped']);
+  const view = createPublicSymbolView(registry, 'app.events', names);
+  const ready = view.get('#ready');
+  assert.ok(ready);
+  assert.equal(view.get('#secret'), null);
+  assert.equal(typeof view.internGlobal, 'undefined');
+  assert.equal(typeof view.internLocal, 'undefined');
+  assert.equal(view.hasGuestId(1n), true);
+  assert.equal(view.hasGuestId(0n), false);
+  assert.equal(view.hasGuestId(3n), false);
+  assert.equal(view.hasGuestId(1), false);
+  const local = registry.internLocal(1, 'app.events', '#secret');
+  assert.equal(view.resolve(local, 1), null);
+  assert.equal(view.canTransport(local, 1, 1), false);
+  assert.equal(view.canTransport(local, 1, 2), false);
+  assert.equal(view.canTransport(ready, 0, 2), true);
+  assert.equal(view.same(ready, structuredClone(ready)), true);
+  assert.equal(view.same(ready, local), false);
+  registry.close();
+});
+
+test('public Symbol view rejects resequenced, unverified, and mutable manifests', async () => {
+  const { createPublicSymbolView } = await import('../src/symbol-registry.js');
+  const r = createSymbolRegistry();
+  assert.throws(() => createPublicSymbolView(r, 'app', ['#ready']), /E_SYMBOL_ABI/);
+  assert.throws(() => createPublicSymbolView(r, 'app', Object.freeze(['#a','#a'])), /E_SYMBOL_ABI/);
+  r.close();
+  const polluted = createSymbolRegistry();
+  polluted.internLocal(3, 'app', '#private');
+  assert.throws(() => createPublicSymbolView(polluted, 'app', Object.freeze(['#ready'])), /E_SYMBOL_ABI/);
+  polluted.close();
 });
