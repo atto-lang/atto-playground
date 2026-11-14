@@ -147,12 +147,12 @@ test('a fault in one actor does not abandon another worker\'s outstanding mail',
         queueMicrotask(() => this.onmessage?.({ data: { kind: 'ready' } }));
       } else if (this.ref === 0) {
         queueMicrotask(() => this.onmessage?.({
-          data: { kind: 'fault', message: 'E_PANIC: synthetic failure', stdout: 'bad\\n' }
+          data: { kind: 'fault', message: 'E_PANIC: synthetic failure', stdout: 'bad\n' }
         }));
       } else {
         setTimeout(() => {
           if (this.live) this.onmessage?.({
-            data: { kind: 'done', sequence: message.sequence, stdout: 'good\\n' }
+            data: { kind: 'done', sequence: message.sequence, stdout: 'good\n' }
           });
         }, 10);
       }
@@ -171,7 +171,7 @@ test('a fault in one actor does not abandon another worker\'s outstanding mail',
   host.send(good, 2n);
   const fault = await host.drain();
   assert.equal(fault, 'E_PANIC: synthetic failure in actor Bad#0');
-  assert.equal(out.text, 'bad\\ngood\\ngood\\n', 'sibling finishes after the first fault');
+  assert.equal(out.text, 'bad\ngood\ngood\n', 'sibling finishes after the first fault');
   assert.throws(() => host.send(bad, 8n), /E_ACTOR_DEAD/);
   assert.equal(workers[0].live, false, 'failed worker was reclaimed');
   host.close();
@@ -215,8 +215,8 @@ pub fnc main(): int {
   return 0;
 }`);
   assert.equal(r.fault, 'E_PANIC: integer overflow in actor W#0');
-  assert.equal(r.stdout.split('\\n').filter(Boolean).length, 5,
+  assert.equal(r.stdout.split('\n').filter(Boolean).length, 5,
     'one bad print and four healthy sibling prints must survive');
-  assert.equal(r.stdout.split('\\n').filter(Boolean).filter(x => x === '0').length, 4);
+  assert.equal(r.stdout.split('\n').filter(Boolean).filter(x => x === '0').length, 4);
   assert.equal(FakeWorker.live, 0);
 });
