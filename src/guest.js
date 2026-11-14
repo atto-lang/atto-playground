@@ -108,11 +108,11 @@ function readManifest(module, sectionName, limit, decodeEntry) {
   return Object.freeze(values);
 }
 
-/** Sorted public/global Symbol spellings, whose guest i64 IDs start at 1. */
-export function symbolManifest(module) {
+/** Decode bounded, sorted immutable Symbol spellings in a named section. */
+function readSymbolNames(module, sectionName) {
   const decoder = new TextDecoder('utf-8', { fatal: true });
   let last = null;
-  const names = readManifest(module, 'atto.symbols', 16_384, ctx => {
+  const names = readManifest(module, sectionName, 16_384, ctx => {
     const len = ctx.uleb();
     if (len < 2 || len > 4096 || ctx.position() + len > ctx.bytes.length) {
       throw new Error('E_SYMBOL_ABI: invalid symbol length');
@@ -144,6 +144,23 @@ export function symbolManifest(module) {
     return name;
   });
   return names ?? Object.freeze([]);
+}
+
+/** Public ordinals are positive, private ordinals are negative. */
+export function symbolManifest(module) {
+  return readSymbolNames(module, 'atto.symbols');
+}
+
+/** Manifest of isolate-local identities, never transportable across actors. */
+export function privateSymbolManifest(module, publicNames = symbolManifest(module)) {
+  const names = readSymbolNames(module, 'atto.private_symbols');
+  const publicSet = new Set(publicNames);
+  for (const name of names) {
+    if (publicSet.has(name)) {
+      throw new Error('E_SYMBOL_ABI: symbol cannot be both private and public');
+    }
+  }
+  return names;
 }
 
 /** Actor-specific payload kind: 0 absent, 1 int, 2 bool, 3 Symbol. */
