@@ -142,3 +142,22 @@ test('closing during a yield cancels queued Wasm mail instead of resuming dead i
   assert.equal(host.memoryBytes, 0);
   assert.throws(() => host.send(a, 1n), /tenant closed/);
 });
+
+test('tenant scheduler resolves the public Symbol manifest and rejects bogus mailbox IDs', async () => {
+  const raw = actorFixture();
+  const typeNames = section(0, flat(str('atto.symbols'), [2], str('#ready'), str('#stopped')));
+  const mail = section(0, flat(str('atto.actor_mail'), [1,3]));
+  const module = new WebAssembly.Module(new Uint8Array([...raw, ...typeNames, ...mail]));
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Worker'], out });
+  assert.equal(host.symbols.count, 2);
+  const global = host.symbols.internGlobal('atto.module', '#ready');
+  assert.equal(host.symbols.same(global, structuredClone(global)), true);
+  const worker = host.spawn(0);
+  assert.throws(() => host.send(worker, 0n), /E_SYMBOL_UNBOUND/);
+  assert.throws(() => host.send(worker, 3n), /E_SYMBOL_UNBOUND/);
+  host.send(worker, 1n);
+  assert.equal(await host.drain(), null);
+  assert.equal(out.text, '1');
+  host.close();
+});

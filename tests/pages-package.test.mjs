@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, posix } from 'node:path';
 import { packagePages, PAGES_ASSETS } from '../scripts/package-pages.mjs';
 
 const releaseWasm = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
@@ -104,4 +104,33 @@ test('forged formatter receipt or Wasm is rejected before staging', async t => {
   await writeFile(join(root,'public/oreslang_format.wasm'),'bad-wasm');
   await assert.rejects(packagePages({root}),/Invalid compiler Wasm/);
   await assert.rejects(readdir(join(root,'_site')),/ENOENT/);
+});
+
+test('packaged JavaScript includes all statically imported runtime dependencies', async () => {
+  const published = new Set(PAGES_ASSETS);
+  assert.ok(published.has('src/symbol-registry.js'), 'symbol registry must ship with actor host');
+  const patterns = [
+    /\bfrom\s*(['"])(\.[^'"]+)\1/g,
+    /\bimport\s*(['"])(\.[^'"]+)\1/g,
+    /\bimport\s*\(\s*(['"])(\.[^'"]+)\1/g,
+    /\bnew\s+URL\(\s*(['"])(\.[^'"]+\.js)\1\s*,\s*import\.meta\.url/g,
+  ];
+  for (const asset of PAGES_ASSETS.filter(name => name.endsWith('.js'))) {
+    const body = await readFile(new URL('../' + asset, import.meta.url), 'utf8');
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      for (const match of body.matchAll(pattern)) {
+        if (!match[2].endsWith('.js')) continue;
+        const dependency = posix.normalize(posix.join(posix.dirname(asset), match[2]));
+        assert.ok(published.has(dependency), asset + ' imports missing Pages asset ' + dependency);
+      }
+    }
+  }
+});
+
+test('packaging fails closed rather than shipping missing symbol dependencies', async t => {
+  const root = await fixture(t);
+  await rm(join(root, 'src/symbol-registry.js'));
+  await assert.rejects(packagePages({ root }), /ENOENT/);
+  await assert.rejects(readdir(join(root, '_site')), /ENOENT/);
 });

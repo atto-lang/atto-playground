@@ -6,7 +6,8 @@
  * numbers from 0. The host lives inside the runner worker: terminating the
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
-import { appendCapped } from './guest.js';
+import { appendCapped, symbolManifest, actorMailKinds } from './guest.js';
+import { createSymbolRegistry } from './symbol-registry.js';
 
 export const MAX_ACTORS = 16;
 export const MAX_MAILBOX = 10_000;
@@ -17,6 +18,12 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
   if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
   const actors = [];
+  // Supervisor-owned; actors receive handles, never shared mutable guest memory.
+  const symbols = createSymbolRegistry();
+  const guestModule = new WebAssembly.Module(wasm);
+  const publicSymbols = symbolManifest(guestModule);
+  const mailKinds = actorMailKinds(guestModule, names.length, publicSymbols.length);
+  for (const name of publicSymbols) symbols.internGlobal('atto.module', name);
   let fault = null, settle = null, closed = false;
 
   const label = a => `${a.name}#${a.ref}`;
@@ -68,6 +75,9 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
+    if (mailKinds[a.type] === 3 && (value < 1n || value > BigInt(publicSymbols.length))) {
+      throw new Error('E_SYMBOL_UNBOUND: actor mailbox rejected unknown global Symbol identity');
+    }
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     a.worker.postMessage({ kind: 'mail', value, sequence: a.sent });
     a.sent++;
@@ -82,11 +92,12 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function close() {
     closed = true;
+    symbols.close();
     for (const a of actors) {
       a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
       a.worker.terminate();
     }
   }
 
-  return { spawn, send, drain, close, get count() { return actors.length; } };
+  return { spawn, send, drain, close, symbols, get count() { return actors.length; } };
 }

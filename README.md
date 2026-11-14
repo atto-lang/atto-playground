@@ -50,3 +50,27 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+
+## Shared symbol identity (host infrastructure; guest lowering pending)
+
+The actor host and tenant scheduler each own a bounded, immutable-identity
+registry in `src/symbol-registry.js`. Supervisors can intern public/core
+symbols with `host.symbols.internGlobal('canonical.module', '#ready')`;
+actor-local symbols use `internLocal(isolate_id, 'canonical.module', '#ready')`.
+Global symbols have one identity across actor contexts in **that tenant**.
+Local symbols are deliberately different for different actors.
+
+Handles are structured-clone-safe `{registry, id}` values; `same(a, b)`
+performs value identity comparison, including after postMessage. They are not
+raw pointers, JavaScript Symbols, or security capabilities. The host owns
+the text; actors retain independent Wasm linear memories. Registry IDs
+expire at host shutdown and cannot be resolved in another tenant.
+
+This does **not** enable `#ready` in compiled Atto guest code yet:
+`atto-source.rs` rejects Symbol syntax, and a typed Symbol message and
+guest-host import ABI have not been lowered. Compiler-visible
+`define pub symbol #ready;` declarations, static AOT symbol descriptors
+and actor/supervisor message wiring must follow the shared contract in
+`atto-lang/atto-common-source`. The name budget limits UTF-8 spelling,
+not JavaScript object/hash table overhead.
