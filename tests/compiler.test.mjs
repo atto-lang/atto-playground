@@ -137,6 +137,20 @@ test('Rust compiler Unicode Symbol spellings survive exact Wasm host validation'
   assert.equal((await execute(result.wasm)).value, 42n);
 });
 
+test('verified actor table is authoritative even if a caller supplies forged host names', async () => {
+  const { createTenantActorHost } = await import('../src/tenant-actor-host.js');
+  const { createActorHost } = await import('../src/actor-host.js');
+  const source = await readFile(new URL('../examples/symbols.atto', import.meta.url),'utf8');
+  const compiled = compiler.compile(source);
+  assert.equal(compiled.ok,true,JSON.stringify(compiled.diagnostics));
+  const module = new WebAssembly.Module(compiled.wasm);
+  assert.deepEqual(actorNames(module),['Worker']);
+  for(const bad of [['Wrong'], ['Worker','Extra'], []]){
+    assert.throws(()=>createTenantActorHost({module,names:bad,out:{text:'',truncated:false}}),/E_ACTOR_PROTOCOL|actor table required/);
+    assert.throws(()=>createActorHost({wasm:compiled.wasm,names:bad,out:{text:'',truncated:false}}),/E_ACTOR_PROTOCOL|needs an actor table/);
+  }
+});
+
 test('browser compiler rejects undeclared, private, and type-confused Symbols', () => {
   for(const [src,code] of [
     ['pub fnc main(): int { const Symbol x = #not_declared; return 0; }','E_SYMBOL_UNBOUND'],
