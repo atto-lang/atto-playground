@@ -121,7 +121,7 @@ test('vendored browser compiler executes Symbol mail across two isolated actors'
   assert.throws(() => host.send(0,0n),/E_SYMBOL_UNBOUND/);
   assert.throws(() => host.send(1,3n),/E_SYMBOL_UNBOUND/);
   assert.equal(await host.drain(),null);
-  assert.equal(out.text,'7\\n7\\n');
+  assert.equal(out.text,'7\n7\n');
   host.close();
 });
 
