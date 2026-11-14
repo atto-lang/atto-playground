@@ -18,6 +18,7 @@ export const PAGES_ASSETS = Object.freeze([
   'src/tenant-actor-host.js',
   'src/wasm-memory-admission.js',
   'src/symbol-registry.js',
+  'src/symbol-linker.js',
   'src/actor-worker.js',
   'src/guest.js',
   'src/worker-task.js',
