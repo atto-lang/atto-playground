@@ -220,3 +220,55 @@ pub fnc main(): int {
   assert.equal(r.stdout.split('\n').filter(Boolean).filter(x => x === '0').length, 4);
   assert.equal(FakeWorker.live, 0);
 });
+
+
+test('mailbox admission freezes during drain and a concurrent drain is rejected', async () => {
+  class ScriptedWorker {
+    postMessage(message) {
+      if (message.kind === 'init') {
+        queueMicrotask(() => this.onmessage?.({ data: { kind: 'ready' } }));
+      } else {
+        queueMicrotask(() => this.onmessage?.({
+          data: { kind: 'done', sequence: message.sequence }
+        }));
+      }
+    }
+    terminate() {}
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['W'], out: { text: '', truncated: false },
+    WorkerImpl: ScriptedWorker, workerUrl: 'actor-worker.js'
+  });
+  const a = host.spawn(0);
+  host.send(a, 1n);
+  const draining = host.drain();
+  assert.throws(() => host.drain(), /E_ACTOR_PROTOCOL: concurrent drains/);
+  assert.throws(() => host.spawn(0), /spawn admission closed/);
+  assert.throws(() => host.send(a, 2n), /mailbox admission closed/);
+  assert.equal(await draining, null);
+  assert.equal(await host.drain(), null, 'subsequent drain is idempotent');
+  host.close();
+});
+
+test('closing the host settles a pending drain and terminates workers exactly once', async () => {
+  class SilentWorker {
+    static instances = [];
+    constructor() { this.terminations = 0; SilentWorker.instances.push(this); }
+    postMessage() {} // no ready/done acknowledgement
+    terminate() { this.terminations++; }
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['W'], out: { text: '', truncated: false },
+    WorkerImpl: SilentWorker, workerUrl: 'actor-worker.js'
+  });
+  const a = host.spawn(0);
+  host.send(a, 1n);
+  const pending = host.drain();
+  host.close();
+  assert.equal(await pending, 'E_ACTOR: actor host closed');
+  assert.equal(await host.drain(), 'E_ACTOR: actor host closed');
+  host.close();
+  assert.deepEqual(SilentWorker.instances.map(w => w.terminations), [1]);
+});
