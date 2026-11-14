@@ -210,10 +210,10 @@ test('indirect private Symbol mail is still rejected at runtime', async () => {
   host.close();
 });
 
-test('browser compiler rejects undeclared, private, and type-confused Symbols', () => {
+test('browser compiler rejects undeclared, private-send, and type-confused Symbols', () => {
   for(const [src,code] of [
     ['pub fnc main(): int { const Symbol x = #not_declared; return 0; }','E_SYMBOL_UNBOUND'],
-    ['define symbol #private; pub fnc main(): int { return 0; }','E_UNSUPPORTED'],
+    ['define symbol #secret; define actor W as receive(ActorMail<Symbol> mail): void { return; } end pub fnc main(): int { val w = spawn W(); w.send(#secret); return 0; }','E_SYMBOL_PRIVATE'],
     ['define pub symbol #ready; define pub symbol #ready; pub fnc main(): int { return 0; }','E_DUPLICATE'],
     ['define pub symbol #ready; pub fnc main(): int { if #ready eq 1 then return 1; fi return 0; }','E_TYPE'],
     ['define pub symbol #ready; pub fnc main(): int { if #ready eq "#ready" then return 1; fi return 0; }','E_TYPE']
