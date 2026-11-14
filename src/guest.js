@@ -76,6 +76,86 @@ export function actorNames(module) {
   return names;
 }
 
+/** Bounded, exact UTF-8 decoding of the additive v2 symbol manifests.
+ *  These are type/identity declarations, never authorization capabilities. */
+function readManifest(module, sectionName, limit, decodeEntry) {
+  const sections = WebAssembly.Module.customSections(module, sectionName);
+  if (!sections.length) return null;
+  if (sections.length !== 1) throw new Error('E_SYMBOL_ABI: duplicate ' + sectionName);
+  const bytes = new Uint8Array(sections[0]);
+  if (bytes.length > 1 << 20) throw new Error('E_SYMBOL_LIMIT: oversized manifest');
+  let pos = 0;
+  function uleb() {
+    let value = 0;
+    for (let i = 0; i < 5; i++) {
+      if (pos >= bytes.length) throw new Error('E_SYMBOL_ABI: truncated manifest');
+      const b = bytes[pos++];
+      if (i === 4 && (b & 0xf0)) throw new Error('E_SYMBOL_ABI: oversized integer');
+      value += (b & 0x7f) * 2 ** (i * 7);
+      if (!(b & 0x80)) {
+        if (i && b === 0) throw new Error('E_SYMBOL_ABI: noncanonical integer');
+        return value;
+      }
+    }
+    throw new Error('E_SYMBOL_ABI: invalid integer');
+  }
+  const count = uleb();
+  if (count > limit) throw new Error('E_SYMBOL_LIMIT: too many manifest entries');
+  const values = [];
+  for (let i = 0; i < count; i++) values.push(decodeEntry({ bytes, uleb, position: () => pos,
+    advance(n) { pos += n; } }));
+  if (pos !== bytes.length) throw new Error('E_SYMBOL_ABI: trailing bytes');
+  return Object.freeze(values);
+}
+
+/** Sorted public/global Symbol spellings, whose guest i64 IDs start at 1. */
+export function symbolManifest(module) {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let last = null;
+  const names = readManifest(module, 'atto.symbols', 16_384, ctx => {
+    const len = ctx.uleb();
+    if (len < 2 || len > 4096 || ctx.position() + len > ctx.bytes.length) {
+      throw new Error('E_SYMBOL_ABI: invalid symbol length');
+    }
+    const raw = ctx.bytes.subarray(ctx.position(), ctx.position() + len);
+    if (last) {
+      let order = 0;
+      for (let i = 0; i < Math.min(last.length, raw.length); i++) {
+        if (raw[i] !== last[i]) { order = raw[i] > last[i] ? 1 : -1; break; }
+      }
+      if (!order) order = Math.sign(raw.length - last.length);
+      if (order <= 0) throw new Error('E_SYMBOL_ABI: symbols are unsorted or duplicate');
+    }
+    const name = decoder.decode(raw);
+    if (!/^#[\\p{L}_][\\p{L}\\p{N}_]*$/u.test(name)) {
+      throw new Error('E_SYMBOL_ABI: invalid symbol spelling');
+    }
+    last = raw.slice();
+    ctx.advance(len);
+    return name;
+  });
+  return names ?? Object.freeze([]);
+}
+
+/** Actor-specific payload kind: 0 absent, 1 int, 2 bool, 3 Symbol. */
+export function actorMailKinds(module, actorCount, symbolCount = 0) {
+  const kinds = readManifest(module, 'atto.actor_mail', 256, ctx => {
+    if (ctx.position() >= ctx.bytes.length) throw new Error('E_SYMBOL_ABI: truncated actor types');
+    const kind = ctx.bytes[ctx.position()];
+    ctx.advance(1);
+    if (kind > 3) throw new Error('E_SYMBOL_ABI: invalid actor mail kind');
+    return kind;
+  });
+  if (!kinds) {
+    if (symbolCount && actorCount) throw new Error('E_SYMBOL_ABI: missing typed actor mail manifest');
+    return Object.freeze([]);
+  }
+  if (kinds.length !== actorCount || (kinds.includes(3) && !symbolCount)) {
+    throw new Error('E_SYMBOL_ABI: actor message manifest mismatch');
+  }
+  return kinds;
+}
+
 /** Validate a guest module's interface and build its import object.
  *  `out` collects stdout as `{ text, truncated }`. `actors` supplies the
  *  `spawn(type)` / `send(ref, value)` capabilities; without it a guest that
