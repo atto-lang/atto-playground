@@ -248,6 +248,11 @@ try {
   }
   assert.match(s.output,/2 actors in one tenant Worker/);
   ok('two actors run as independent Wasm instances in one Worker');
+  await example('symbols');
+  s=await run('success','main() → 42');
+  assert.match(s.output,/^7\n7\nmain\(\) → 42/);
+  assert.match(s.output,/2 actors in one tenant Worker/);
+  ok('new vendored Rust compiler recognizes #ready and two isolated actors share global Symbol identity');
   await source('define actor W as\n  receive(ActorMail<int> mail): void {\n    stdio.println(mail.value);\n    stdio.println(mail.value * 9223372036854775807);\n    return;\n  }\nend\npub fnc main(): int {\n  val w = spawn W();\n  w.send(7);\n  w.send(8);\n  return 0;\n}');
   s=await run('error','E_PANIC: integer overflow in actor W#0');
   assert.match(s.output,/^7\nE_PANIC: integer overflow in actor W#0/);
