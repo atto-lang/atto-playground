@@ -165,6 +165,44 @@ export function actorMailKinds(module, actorCount, symbolCount = 0) {
   return kinds;
 }
 
+/**
+ * Validate that the caller's actor-type lookup agrees with the compiled
+ * module. Older hand-written v2 test artifacts may have no actor-name table,
+ * but if one is present it must be authoritative (including duplicates).
+ */
+export function requireActorTypeTable(module, names) {
+  if (!Array.isArray(names) || names.length > MAX_ACTOR_TYPES) {
+    throw new Error('E_ACTOR_PROTOCOL: invalid actor type table');
+  }
+  if (WebAssembly.Module.customSections(module, 'atto.actors').length) {
+    const declared = actorNames(module);
+    if (declared.length !== names.length ||
+        declared.some((name, index) => name !== names[index])) {
+      throw new Error('E_ACTOR_PROTOCOL: host actor type table disagrees with guest');
+    }
+  }
+}
+
+/** Enforce typed payload admission at the actual mailbox, not just in a test helper. */
+export function admitActorMail(kind, value, symbols) {
+  // Legacy browser guest v2 artifacts predate the typed mail custom section.
+  if (kind === undefined || kind === 1) return;
+  if (kind === 0) throw new Error('E_ACTOR_NO_RECEIVE: target actor has no mailbox handler');
+  if (kind === 2) {
+    if (value !== 0n && value !== 1n) {
+      throw new Error('E_ACTOR_MAIL_TYPE: bool mailbox accepts only 0 or 1');
+    }
+    return;
+  }
+  if (kind === 3) {
+    if (!symbols.hasGuestId(value)) {
+      throw new Error('E_SYMBOL_UNBOUND: actor mailbox rejected unknown global Symbol identity');
+    }
+    return;
+  }
+  throw new Error('E_SYMBOL_ABI: unknown actor mailbox kind');
+}
+
 /** Validate a guest module's interface and build its import object.
  *  `out` collects stdout as `{ text, truncated }`. `actors` supplies the
  *  `spawn(type)` / `send(ref, value)` capabilities; without it a guest that
