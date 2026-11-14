@@ -151,8 +151,11 @@ test('tenant scheduler resolves the public Symbol manifest and rejects bogus mai
   const out = { text: '', truncated: false };
   const host = createTenantActorHost({ module, names: ['Worker'], out });
   assert.equal(host.symbols.count, 2);
-  const global = host.symbols.internGlobal('atto.module', '#ready');
+  const global = host.symbols.get('#ready');
   assert.equal(host.symbols.same(global, structuredClone(global)), true);
+  assert.equal(host.symbols.get('#unknown'), null);
+  assert.equal(typeof host.symbols.internGlobal, 'undefined');
+  assert.equal(typeof host.symbols.internLocal, 'undefined');
   const worker = host.spawn(0);
   assert.throws(() => host.send(worker, 0n), /E_SYMBOL_UNBOUND/);
   assert.throws(() => host.send(worker, 3n), /E_SYMBOL_UNBOUND/);
