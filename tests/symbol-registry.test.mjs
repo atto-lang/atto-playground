@@ -254,3 +254,31 @@ test('public Symbol view rejects resequenced, unverified, and mutable manifests'
   assert.throws(() => createPublicSymbolView(polluted, 'app', Object.freeze(['#ready'])), /E_SYMBOL_ABI/);
   polluted.close();
 });
+
+test('manifest Unicode accepts Rust is_alphabetic and is_alphanumeric beyond General_Category=L', async () => {
+  const { symbolManifest } = await import('../src/guest.js');
+  const bytes = v => Array.from(new TextEncoder().encode(v));
+  const word = v => [bytes(v).length, ...bytes(v)];
+  const make = entries => {
+    const payload = [entries.length, ...entries.flatMap(word)];
+    const section = [...word('atto.symbols'), ...payload];
+    return new WebAssembly.Module(Uint8Array.from([0,97,115,109,1,0,0,0,0,section.length,...section]));
+  };
+  // U+0345 is Other_Alphabetic despite being a combining mark (category Mn).
+  // Rust char::is_alphabetic('ͅ') accepts it; the host must agree exactly.
+  assert.deepEqual(symbolManifest(make(['#alphaͅ', '#ͅ'])), ['#alphaͅ', '#ͅ']);
+  // Explicit negative: non-alphabetic symbol decoration must fail closed.
+  assert.throws(() => symbolManifest(make(['#✉'])), /E_SYMBOL_ABI/);
+});
+
+test('malformed UTF-8 and noncanonical Symbol section lengths report E_SYMBOL_ABI', async () => {
+  const { symbolManifest } = await import('../src/guest.js');
+  const str = s => [...new TextEncoder().encode(s)];
+  const pack = payload => {
+    const inner = [12, ...str('atto.symbols'), ...payload];
+    return new WebAssembly.Module(Uint8Array.from([0,97,115,109,1,0,0,0,0,inner.length,...inner]));
+  };
+  assert.throws(() => symbolManifest(pack([1,2,35,255])), /E_SYMBOL_ABI/);
+  assert.throws(() => symbolManifest(pack([1,0x82,0,35,97])), /E_SYMBOL_ABI/);
+  assert.throws(() => symbolManifest(pack([1,4,35,97])), /E_SYMBOL_ABI/);
+});
