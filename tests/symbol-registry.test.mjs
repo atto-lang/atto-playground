@@ -282,3 +282,34 @@ test('malformed UTF-8 and noncanonical Symbol section lengths report E_SYMBOL_AB
   assert.throws(() => symbolManifest(pack([1,0x82,0,35,97])), /E_SYMBOL_ABI/);
   assert.throws(() => symbolManifest(pack([1,4,35,97])), /E_SYMBOL_ABI/);
 });
+
+test('private symbol metadata is sorted, bounded, and never exported as public', async () => {
+  const { privateSymbolManifest, symbolManifest } = await import('../src/guest.js');
+  const leb = n => { const o=[]; do {let b=n & 127;n>>>=7;if(n)b|=128;o.push(b);}while(n);return o; };
+  const str = v => {const b=[...new TextEncoder().encode(v)];return [...leb(b.length),...b];};
+  const custom = (section,values) => {const content=[...str(section),values.length,...values.flatMap(str)];return [0,...leb(content.length),...content];};
+  const wasm = (...sections) => new WebAssembly.Module(Uint8Array.from([0,97,115,109,1,0,0,0,...sections.flat()]));
+  const valid=wasm(custom('atto.symbols',['#ready']),custom('atto.private_symbols',['#secret','#z']));
+  assert.deepEqual(symbolManifest(valid),['#ready']);
+  assert.deepEqual(privateSymbolManifest(valid),['#secret','#z']);
+  assert.deepEqual(privateSymbolManifest(wasm()),[]);
+  assert.throws(()=>privateSymbolManifest(wasm(custom('atto.symbols',['#secret']),
+    custom('atto.private_symbols',['#secret']))), /E_SYMBOL_ABI/);
+  assert.throws(()=>privateSymbolManifest(wasm(custom('atto.private_symbols',['#z','#secret']))), /E_SYMBOL_ABI/);
+  assert.throws(()=>privateSymbolManifest(wasm(custom('atto.private_symbols',['#secret','#secret']))), /E_SYMBOL_ABI/);
+  assert.throws(()=>privateSymbolManifest(wasm(custom('atto.private_symbols',['#a']),
+    custom('atto.private_symbols',['#b']))), /E_SYMBOL_ABI/);
+});
+
+test('private Symbol IDs remain distinct across supervised actor isolates', () => {
+  const registry=createSymbolRegistry();
+  const name='#private';
+  const supervisor=registry.internLocal(0,'atto.module',name);
+  const first=registry.internLocal(actorIsolateId(0),'atto.module',name);
+  const second=registry.internLocal(actorIsolateId(1),'atto.module',name);
+  assert.equal(registry.same(first,second),false);
+  assert.equal(registry.same(first,supervisor),false);
+  assert.equal(registry.canTransport(first,actorIsolateId(0),actorIsolateId(1)),false);
+  assert.equal(registry.canTransport(supervisor,0,actorIsolateId(0)),false);
+  registry.close();
+});
