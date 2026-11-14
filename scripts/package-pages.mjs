@@ -47,6 +47,7 @@ export const PAGES_ASSETS = Object.freeze([
   'examples/overflow.atto',
   'examples/primes.atto',
   'examples/strings.atto',
+  'examples/symbols.atto',
 ]);
 
 async function checkedFile(root, name) {
