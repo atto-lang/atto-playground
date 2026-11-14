@@ -127,7 +127,7 @@ export function symbolManifest(module) {
       if (order <= 0) throw new Error('E_SYMBOL_ABI: symbols are unsorted or duplicate');
     }
     const name = decoder.decode(raw);
-    if (!/^#[\\p{L}_][\\p{L}\\p{N}_]*$/u.test(name)) {
+    if (!/^#[\p{L}_][\p{L}\p{N}_]*$/u.test(name)) {
       throw new Error('E_SYMBOL_ABI: invalid symbol spelling');
     }
     last = raw.slice();
