@@ -125,6 +125,18 @@ test('vendored browser compiler executes Symbol mail across two isolated actors'
   host.close();
 });
 
+test('Rust compiler Unicode Symbol spellings survive exact Wasm host validation', async () => {
+  const { symbolManifest } = await import('../src/guest.js');
+  const source = 'define pub symbol #alphaͅ;\n' +
+    'define pub symbol #ͅ;\n' +
+    'pub fnc main(): int { const Symbol status = #ͅ; if status eq #ͅ then return 42; fi return 0; }';
+  const result = compiler.compile(source);
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  const module = new WebAssembly.Module(result.wasm);
+  assert.deepEqual(symbolManifest(module), ['#alphaͅ','#ͅ']);
+  assert.equal((await execute(result.wasm)).value, 42n);
+});
+
 test('browser compiler rejects undeclared, private, and type-confused Symbols', () => {
   for(const [src,code] of [
     ['pub fnc main(): int { const Symbol x = #not_declared; return 0; }','E_SYMBOL_UNBOUND'],
