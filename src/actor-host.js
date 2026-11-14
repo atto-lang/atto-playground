@@ -6,7 +6,7 @@
  * numbers from 0. The host lives inside the runner worker: terminating the
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
-import { appendCapped, symbolManifest, actorMailKinds } from './guest.js';
+import { appendCapped, symbolManifest, actorMailKinds, requireActorTypeTable, admitActorMail } from './guest.js';
 import { createSymbolRegistry, createPublicSymbolView } from './symbol-registry.js';
 
 export const MAX_ACTORS = 16;
@@ -21,6 +21,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   // Supervisor-owned; actors receive handles, never shared mutable guest memory.
   const privateSymbols = createSymbolRegistry();
   const guestModule = new WebAssembly.Module(wasm);
+  requireActorTypeTable(guestModule, names);
   const publicSymbols = symbolManifest(guestModule);
   const mailKinds = actorMailKinds(guestModule, names.length, publicSymbols.length);
   const symbols = createPublicSymbolView(privateSymbols, 'atto.module', publicSymbols);
@@ -75,9 +76,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
-    if (mailKinds[a.type] === 3 && !symbols.hasGuestId(value)) {
-      throw new Error('E_SYMBOL_UNBOUND: actor mailbox rejected unknown global Symbol identity');
-    }
+    admitActorMail(mailKinds[a.type], value, symbols);
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     a.worker.postMessage({ kind: 'mail', value, sequence: a.sent });
     a.sent++;
