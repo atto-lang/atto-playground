@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSymbolRegistry, MAX_SYMBOLS, MAX_SYMBOL_BYTES } from '../src/symbol-registry.js';
+import { createSymbolRegistry, MAX_SYMBOLS, MAX_SYMBOL_BYTES, actorIsolateId, SUPERVISOR_ISOLATE_ID } from '../src/symbol-registry.js';
 
 test('supervisor and actor contexts resolve one exported global identity', () => {
   const registry = createSymbolRegistry();
@@ -131,4 +131,44 @@ test('both actor host lifecycles own independent registries and invalidate them 
   tenantHost.close();
   assert.throws(() => workerHost.symbols.internGlobal('events', '#more'), /E_SYMBOL_CLOSED/);
   assert.throws(() => tenantHost.symbols.internGlobal('events', '#more'), /E_SYMBOL_CLOSED/);
+});
+
+test('supervisor isolate ID never aliases actor zero and rejects wraparound', () => {
+  assert.equal(SUPERVISOR_ISOLATE_ID, 0);
+  assert.equal(actorIsolateId(0), 1);
+  assert.equal(actorIsolateId(1), 2);
+  for (const bad of [-1, 0.5, Number.MAX_SAFE_INTEGER, '0', null]) {
+    assert.throws(() => actorIsolateId(bad), /E_SYMBOL_SCOPE/);
+  }
+});
+
+test('private symbols fail cross-isolate transport; globals are copyable', () => {
+  const symbols = createSymbolRegistry();
+  const supervisor = SUPERVISOR_ISOLATE_ID;
+  const a = actorIsolateId(0);
+  const b = actorIsolateId(1);
+  const global = symbols.internGlobal('app.events', '#ready');
+  const privateA = symbols.internLocal(a, 'app.events', '#ready');
+  assert.equal(symbols.canTransport(global, supervisor, a), true);
+  assert.equal(symbols.canTransport(structuredClone(global), a, b), true);
+  assert.equal(symbols.canTransport(privateA, a, b), false);
+  assert.equal(symbols.canTransport(privateA, a, supervisor), false);
+  assert.equal(symbols.canTransport(privateA, b, b), false);
+  assert.equal(symbols.canTransport(privateA, a, a), true);
+  assert.equal(symbols.canTransport({registry: symbols.registryId, id: 123456n}, a, b), false);
+  assert.throws(() => symbols.canTransport(global, -1, a), /E_SYMBOL_SCOPE/);
+  symbols.close();
+  assert.throws(() => symbols.canTransport(global, a, b), /E_SYMBOL_CLOSED/);
+});
+
+test('unpaired UTF-16 surrogates are never accepted as a second UTF-8 spelling', () => {
+  const symbols = createSymbolRegistry();
+  const replacement = symbols.internGlobal('core', '#\uFFFD');
+  for (const invalid of ['#\uD800', '#\uDC00', '#a\uD800b', '#\uDBFF']) {
+    assert.throws(() => symbols.internGlobal('core', invalid), /E_SYMBOL_NAME/);
+  }
+  assert.throws(() => symbols.internGlobal('bad\uDC00', '#ready'), /E_SYMBOL_NAME/);
+  assert.equal(symbols.count, 1);
+  assert.equal(symbols.same(replacement, symbols.internGlobal('core', '#\uFFFD')), true);
+  symbols.close();
 });
