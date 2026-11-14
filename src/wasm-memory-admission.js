@@ -16,6 +16,7 @@ export function admitWasm32Memory(bytes, { maxPages = MAX_GUEST_MEMORY_PAGES } =
     throw new RangeError('E_ACTOR_MEMORY: invalid memory page quota');
   }
   let pos = 8, memorySeen = false, declaredMemories = 0;
+  let minimumPages = 0, maximumPages = 0;
   const u32 = (end) => {
     let value = 0;
     for (let i = 0; i < 5; i++) {
@@ -53,10 +54,15 @@ export function admitWasm32Memory(bytes, { maxPages = MAX_GUEST_MEMORY_PAGES } =
         if (minimum > maximum || maximum > maxPages) {
           throw new Error(`E_ACTOR_MEMORY: declared memory exceeds ${maxPages} pages`);
         }
+        minimumPages = minimum;
+        maximumPages = maximum;
       }
       if (pos !== end) throw new Error('E_ACTOR_MEMORY: invalid memory section tail');
     }
     pos = end;
   }
-  return { memoryCount: declaredMemories, maxPages };
+  // Distinguish declared reserves from the policy quota. With no declared
+  // memory, both page values are zero; guestImports separately denies imports.
+  // Callers can budget actor fleets without instantiating untrusted guests.
+  return { memoryCount: declaredMemories, maxPages, minimumPages, maximumPages };
 }
