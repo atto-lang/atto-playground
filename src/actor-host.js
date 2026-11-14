@@ -81,10 +81,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
-    if (admissionClosed) throw new Error('E_ACTOR: mailbox admission closed after main returned');
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
+    // Preserve the terminal actor reason even after global admission closes.
     if (a.failed) throw new Error(`E_ACTOR_DEAD: actor ${label(a)} terminated`);
+    if (admissionClosed) throw new Error('E_ACTOR: mailbox admission closed after main returned');
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     if (a.sent >= MAX_MAILBOX) throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     a.worker.postMessage({ kind: 'mail', value, sequence: a.sent });
