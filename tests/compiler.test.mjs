@@ -94,6 +94,52 @@ test('control flow, recursion and overloads', async () => {
   assert.equal((await run('fnc fact(int n): int {\n  if n <= 1 then\n    return 1;\n  fi\n  return n * fact(n - 1);\n}\n' + main('  return fact(20);'))).value, 2432902008176640000n);
 });
 
+test('vendored browser compiler executes Symbol mail across two isolated actors', async () => {
+  const { createTenantActorHost } = await import('../src/tenant-actor-host.js');
+  const { symbolManifest, actorMailKinds } = await import('../src/guest.js');
+  const source = await readFile(new URL('../examples/symbols.atto', import.meta.url), 'utf8');
+  const result = compiler.compile(source);
+  assert.equal(result.ok, true, JSON.stringify(result.diagnostics));
+  const module = new WebAssembly.Module(result.wasm);
+  const names = actorNames(module);
+  assert.deepEqual(names, ['Worker']);
+  assert.deepEqual(symbolManifest(module), ['#ready', '#stopped']);
+  assert.deepEqual(actorMailKinds(module, names.length, 2), [3]);
+
+  const out = {text:'', truncated:false};
+  const host = createTenantActorHost({module,names,out});
+  const ready = host.symbols.get('#ready');
+  assert.equal(ready.id, 1n);
+  assert.equal(host.symbols.same(ready, structuredClone(ready)), true);
+  assert.equal(typeof host.symbols.internGlobal, 'undefined');
+  assert.equal(typeof host.symbols.internLocal, 'undefined');
+  const supervisor = guestImports(module,out,host);
+  const main = new WebAssembly.Instance(module,supervisor.imports);
+  supervisor.bind(main);
+  assert.equal(main.exports.main(),42n);
+  assert.equal(host.count,2);
+  assert.throws(() => host.send(0,0n),/E_SYMBOL_UNBOUND/);
+  assert.throws(() => host.send(1,3n),/E_SYMBOL_UNBOUND/);
+  assert.equal(await host.drain(),null);
+  assert.equal(out.text,'7\\n7\\n');
+  host.close();
+});
+
+test('browser compiler rejects undeclared, private, and type-confused Symbols', () => {
+  for(const [src,code] of [
+    ['pub fnc main(): int { const Symbol x = #not_declared; return 0; }','E_SYMBOL_UNBOUND'],
+    ['define symbol #private; pub fnc main(): int { return 0; }','E_UNSUPPORTED'],
+    ['define pub symbol #ready; define pub symbol #ready; pub fnc main(): int { return 0; }','E_DUPLICATE'],
+    ['define pub symbol #ready; pub fnc main(): int { if #ready eq 1 then return 1; fi return 0; }','E_TYPE'],
+    ['define pub symbol #ready; pub fnc main(): int { if #ready eq "#ready" then return 1; fi return 0; }','E_TYPE']
+  ]){
+    const result=compiler.compile(src);
+    assert.equal(result.ok,false,src);
+    assert.equal(result.wasm,undefined,src);
+    assert.match(result.diagnostics[0].message,new RegExp('^'+code),src);
+  }
+});
+
 test('compilation produces source-dependent Wasm artifacts', async () => {
   const first = compiler.compile(main('  return 41;'));
   const second = compiler.compile(main('  return 42;'));
