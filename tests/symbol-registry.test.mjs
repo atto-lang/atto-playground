@@ -172,3 +172,45 @@ test('unpaired UTF-16 surrogates are never accepted as a second UTF-8 spelling',
   assert.equal(symbols.same(replacement, symbols.internGlobal('core', '#\uFFFD')), true);
   symbols.close();
 });
+
+test('guest static Symbol manifest is accepted only when canonical and bounded', async () => {
+  const { symbolManifest, actorMailKinds } = await import('../src/guest.js');
+  const leb = n => { const out = []; do { let b = n & 127; n >>>= 7; if (n) b |= 128; out.push(b); } while (n); return out; };
+  const str = value => { const bytes = [...new TextEncoder().encode(value)]; return [...leb(bytes.length), ...bytes]; };
+  const custom = (name, payload) => { const body = [...str(name), ...payload]; return [0, ...leb(body.length), ...body]; };
+  const wasm = (...sections) => new WebAssembly.Module(Uint8Array.from([0,97,115,109,1,0,0,0,...sections.flat()]));
+  const names = ['#ready', '#stopped'];
+  const module = wasm(custom('atto.symbols', [2, ...str(names[0]), ...str(names[1])]),
+                      custom('atto.actor_mail', [1,3]));
+  assert.deepEqual(symbolManifest(module), names);
+  assert.deepEqual(actorMailKinds(module, 1, 2), [3]);
+  assert.throws(() => symbolManifest(wasm(custom('atto.symbols', [2, ...str('#ready'), ...str('#ready')]))), /E_SYMBOL_ABI/);
+  assert.throws(() => symbolManifest(wasm(custom('atto.symbols', [2, ...str('#stopped'), ...str('#ready')]))), /E_SYMBOL_ABI/);
+  assert.throws(() => symbolManifest(wasm(custom('atto.symbols', [1, ...str('ready')]))), /E_SYMBOL_ABI/);
+  assert.throws(() => symbolManifest(wasm(custom('atto.symbols', [1, 8, 35,114]))), /E_SYMBOL_ABI/);
+  assert.throws(() => actorMailKinds(wasm(custom('atto.symbols', [1, ...str('#ready')])), 1, 1), /E_SYMBOL_ABI/);
+  assert.throws(() => actorMailKinds(wasm(custom('atto.actor_mail', [1,3])), 1, 0), /E_SYMBOL_ABI/);
+});
+
+test('actor host pre-interns declared globals and rejects unknown Symbol mail', async () => {
+  const { createActorHost } = await import('../src/actor-host.js');
+  const leb = n => { const o=[]; do {let b=n & 127;n>>>=7;if(n)b|=128;o.push(b);}while(n); return o; };
+  const str = v => { const b=[...new TextEncoder().encode(v)];return [...leb(b.length), ...b]; };
+  const section = (name, content) => { const b=[...str(name),...content];return [0,...leb(b.length),...b]; };
+  const wasm = Uint8Array.from([0,97,115,109,1,0,0,0,
+    ...section('atto.symbols',[2,...str('#ready'),...str('#stopped')]),
+    ...section('atto.actor_mail',[1,3])]);
+  class StubWorker { postMessage(_) {} terminate() {} }
+  const host = createActorHost({ wasm, names: ['Worker'],
+    out: {text:'',truncated:false}, WorkerImpl: StubWorker, workerUrl:'unused' });
+  assert.equal(host.symbols.count, 2);
+  const ready = host.symbols.internGlobal('atto.module', '#ready');
+  const copied = structuredClone(ready);
+  assert.equal(host.symbols.same(ready, copied), true);
+  const worker = host.spawn(0);
+  host.send(worker, 1n);
+  host.send(worker, 2n);
+  assert.throws(() => host.send(worker, 0n), /E_SYMBOL_UNBOUND/);
+  assert.throws(() => host.send(worker, 3n), /E_SYMBOL_UNBOUND/);
+  host.close();
+});
