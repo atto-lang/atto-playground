@@ -183,3 +183,49 @@ export function createSymbolRegistry({
     get registryId() { return registry; },
   });
 }
+
+/**
+ * Unprivileged, immutable view of a *compiler-declared* public Symbol table.
+ * The runtime keeps the owning registry private. Neither guest code nor
+ * external callers can mint new global/local symbols through this view.
+ *
+ * A view grants identity lookup, NOT authority to send a message, access an
+ * actor's sealed state or import a module. The compiler performs name/visibility
+ * checks; mailboxes still enforce their own admission rules.
+ */
+export function createPublicSymbolView(registry, moduleName, names) {
+  if (!registry || !Array.isArray(names) || !Object.isFrozen(names)) {
+    throw new TypeError('E_SYMBOL_ABI: expected a verified frozen Symbol manifest');
+  }
+  const byName = new Map();
+  const ids = new Set();
+  for (const [index, name] of names.entries()) {
+    if (byName.has(name)) throw new Error('E_SYMBOL_ABI: duplicate public Symbol');
+    const handle = registry.internGlobal(moduleName, name);
+    // The current v2 same-module guest ABI uses one-based sorted ordinals.
+    // Prevent unrelated registry entries silently reindexing compiled handles.
+    if (handle.id !== BigInt(index + 1)) {
+      throw new Error('E_SYMBOL_ABI: public Symbol IDs disagree with guest table');
+    }
+    byName.set(name, handle);
+    ids.add(handle.id);
+  }
+  function admitted(handle) {
+    return handle && ids.has(handle.id) &&
+      registry.resolve(handle, SUPERVISOR_ISOLATE_ID)?.scope === 'global';
+  }
+  return Object.freeze({
+    get(name) { return byName.get(name) ?? null; },
+    resolve(handle, isolateId) {
+      const entry = registry.resolve(handle, isolateId);
+      return entry && entry.scope === 'global' && entry.module === moduleName &&
+        byName.has(entry.name) ? entry : null;
+    },
+    same(left, right) { return admitted(left) && admitted(right) && registry.same(left, right); },
+    canTransport(handle, fromIsolateId, toIsolateId) {
+      return !!admitted(handle) && registry.canTransport(handle, fromIsolateId, toIsolateId);
+    },
+    hasGuestId(value) { return typeof value === 'bigint' && ids.has(value); },
+    get count() { return byName.size; },
+  });
+}
