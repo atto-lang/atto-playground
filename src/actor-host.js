@@ -17,7 +17,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
   if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
   const actors = [];
-  let fault = null, settle = null, closed = false;
+  let fault = null, settle = null, closed = false, draining = false, admissionClosed = false;
 
   const label = a => `${a.name}#${a.ref}`;
   function terminate(a) {
@@ -38,10 +38,11 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!settle) return;
     // A fault is terminal for its own actor only. All healthy actors must
     // finish their admitted mail, and startup must succeed even with no mail.
-    if (actors.every(a => a.failed || (a.ready && a.done === a.sent))) {
+    if (closed || actors.every(a => a.failed || (a.ready && a.done === a.sent))) {
       const resolve = settle;
       settle = null;
-      resolve(fault);
+      draining = false;
+      resolve(closed ? (fault || 'E_ACTOR: actor host closed') : fault);
     }
   }
   function onMessage(a, data) {
@@ -63,6 +64,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function spawn(type) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
+    if (admissionClosed) throw new Error('E_ACTOR: spawn admission closed after main returned');
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
@@ -79,6 +81,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   function send(ref, value) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
+    if (admissionClosed) throw new Error('E_ACTOR: mailbox admission closed after main returned');
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
     if (!a) throw new Error('E_ACTOR: invalid actor reference');
     if (a.failed) throw new Error(`E_ACTOR_DEAD: actor ${label(a)} terminated`);
@@ -92,12 +95,21 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
    *  startup (or failed). Preserve the first fault while siblings continue.
    *  Mail comes only from main, so after main returns it is final. */
   function drain() {
+    if (closed) return Promise.resolve('E_ACTOR: actor host closed');
+    if (draining) throw new Error('E_ACTOR_PROTOCOL: concurrent drains');
+    // No new messages after drain starts: otherwise termination detection can
+    // race with a producer extending a mailbox after the last completion.
+    admissionClosed = true;
+    draining = true;
     return new Promise(resolve => { settle = resolve; check(); });
   }
 
   function close() {
+    if (closed) return;
     closed = true;
     for (const a of actors) terminate(a);
+    // Explicit shutdown must settle an outstanding drain, never hang callers.
+    check();
   }
 
   return { spawn, send, drain, close, get count() { return actors.length; } };
