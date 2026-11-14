@@ -6,8 +6,8 @@
  * numbers from 0. The host lives inside the runner worker: terminating the
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
-import { appendCapped, symbolManifest, actorMailKinds, requireActorTypeTable, admitActorMail } from './guest.js';
-import { createSymbolRegistry, createPublicSymbolView } from './symbol-registry.js';
+import { appendCapped, symbolManifest, privateSymbolManifest, actorMailKinds, requireActorTypeTable, admitActorMail } from './guest.js';
+import { createSymbolRegistry, createPublicSymbolView, actorIsolateId, SUPERVISOR_ISOLATE_ID } from './symbol-registry.js';
 
 export const MAX_ACTORS = 16;
 export const MAX_MAILBOX = 10_000;
@@ -23,8 +23,15 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   const guestModule = new WebAssembly.Module(wasm);
   requireActorTypeTable(guestModule, names);
   const publicSymbols = symbolManifest(guestModule);
+  const privateNames = privateSymbolManifest(guestModule, publicSymbols);
   const mailKinds = actorMailKinds(guestModule, names.length, publicSymbols.length);
   const symbols = createPublicSymbolView(privateSymbols, 'atto.module', publicSymbols);
+  // Private values use negative guest ordinals. Their host identities are
+  // qualified by owner isolate: the same spelling in sibling actors is NOT
+  // the same Symbol, and none of them is exposed in the public view.
+  for (const name of privateNames) {
+    privateSymbols.internLocal(SUPERVISOR_ISOLATE_ID, 'atto.module', name);
+  }
   let fault = null, settle = null, closed = false;
 
   const label = a => `${a.name}#${a.ref}`;
@@ -60,6 +67,9 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
+    for (const name of privateNames) {
+      privateSymbols.internLocal(actorIsolateId(ref), 'atto.module', name);
+    }
     const a = { ref, type, name: names[type], sent: 0, done: 0, worker: null };
     a.worker = new WorkerImpl(workerUrl, { type: 'module' });
     a.worker.onmessage = event => onMessage(a, event.data);
