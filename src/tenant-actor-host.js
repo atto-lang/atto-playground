@@ -10,7 +10,7 @@
  * There is NO preemption inside a guest call yet. The outer runner deadline
  * must terminate the tenant worker if a guest loops forever.
  */
-import { appendCapped, describePanic, guestImports, symbolManifest, actorMailKinds } from './guest.js';
+import { appendCapped, describePanic, guestImports, symbolManifest, actorMailKinds, requireActorTypeTable, admitActorMail } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
 import { createSymbolRegistry, createPublicSymbolView } from './symbol-registry.js';
 
@@ -24,6 +24,7 @@ export function createTenantActorHost({ module, names, out }) {
   if (!Array.isArray(names) || !names.length) throw new Error('actor table required');
   if (!out || typeof out.text !== 'string') throw new TypeError('stdout accumulator required');
 
+  requireActorTypeTable(module, names);
   const actors = [];
   // One immutable-identity table for the supervisor and all guest instances.
   const privateSymbols = createSymbolRegistry();
@@ -102,9 +103,7 @@ export function createTenantActorHost({ module, names, out }) {
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) {
       throw new Error('E_ACTOR: mail must be a signed 64-bit value');
     }
-    if (mailKinds[a.type] === 3 && !symbols.hasGuestId(value)) {
-      throw new Error('E_SYMBOL_UNBOUND: actor mailbox rejected unknown global Symbol identity');
-    }
+    admitActorMail(mailKinds[a.type], value, symbols);
     if (a.sent >= MAX_MAILBOX) {
       throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     }
