@@ -10,9 +10,9 @@
  * There is NO preemption inside a guest call yet. The outer runner deadline
  * must terminate the tenant worker if a guest loops forever.
  */
-import { appendCapped, describePanic, guestImports, symbolManifest, actorMailKinds, requireActorTypeTable, admitActorMail } from './guest.js';
+import { appendCapped, describePanic, guestImports, symbolManifest, privateSymbolManifest, actorMailKinds, requireActorTypeTable, admitActorMail } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
-import { createSymbolRegistry, createPublicSymbolView } from './symbol-registry.js';
+import { createSymbolRegistry, createPublicSymbolView, actorIsolateId, SUPERVISOR_ISOLATE_ID } from './symbol-registry.js';
 
 const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
@@ -29,8 +29,15 @@ export function createTenantActorHost({ module, names, out }) {
   // One immutable-identity table for the supervisor and all guest instances.
   const privateSymbols = createSymbolRegistry();
   const publicSymbols = symbolManifest(module);
+  const privateNames = privateSymbolManifest(module, publicSymbols);
   const mailKinds = actorMailKinds(module, names.length, publicSymbols.length);
   const symbols = createPublicSymbolView(privateSymbols, 'atto.module', publicSymbols);
+  // Private values use negative guest ordinals. Their host identities are
+  // qualified by owner isolate: the same spelling in sibling actors is NOT
+  // the same Symbol, and none of them is exposed in the public view.
+  for (const name of privateNames) {
+    privateSymbols.internLocal(SUPERVISOR_ISOLATE_ID, 'atto.module', name);
+  }
   let fault = null;
   let closed = false;
   let draining = false;
@@ -75,6 +82,9 @@ export function createTenantActorHost({ module, names, out }) {
       output: { text: '', truncated: false }, mailbox: [], head: 0,
       sent: 0, failed: false
     };
+    for (const name of privateNames) {
+      privateSymbols.internLocal(actorIsolateId(a.ref), 'atto.module', name);
+    }
     actors.push(a);
     try {
       const host = guestImports(module, a.output);
