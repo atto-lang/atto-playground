@@ -112,3 +112,23 @@ test('invalid namespaces, owners, names and registry limits fail closed', () => 
   assert.throws(() => createSymbolRegistry({ maxBytes: MAX_SYMBOL_BYTES + 1 }), /E_SYMBOL_LIMIT/);
   symbols.close();
 });
+
+test('both actor host lifecycles own independent registries and invalidate them at close', async () => {
+  const { createActorHost } = await import('../src/actor-host.js');
+  const { createTenantActorHost } = await import('../src/tenant-actor-host.js');
+  const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]); // valid empty module
+  const out = { text: '', truncated: false };
+  const workerHost = createActorHost({ wasm, names: ['A'], out });
+  const tenantHost = createTenantActorHost({
+    module: new WebAssembly.Module(wasm), names: ['A'], out,
+  });
+  const workerReady = workerHost.symbols.internGlobal('events', '#ready');
+  const tenantReady = tenantHost.symbols.internGlobal('events', '#ready');
+  assert.equal(workerHost.symbols.same(workerReady, workerReady), true);
+  assert.equal(workerHost.symbols.same(workerReady, tenantReady), false);
+  assert.equal(tenantHost.symbols.resolve(workerReady, 0), null);
+  workerHost.close();
+  tenantHost.close();
+  assert.throws(() => workerHost.symbols.internGlobal('events', '#more'), /E_SYMBOL_CLOSED/);
+  assert.throws(() => tenantHost.symbols.internGlobal('events', '#more'), /E_SYMBOL_CLOSED/);
+});
