@@ -1,0 +1,126 @@
+/** Independent real-Chromium execution of the JSPI async/2 tenant bridge.
+ * Serves only pinned source modules and runs a real core-Wasm fixture.
+ * No compiler vendor binary is needed or claimed to have async syntax.
+ */
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+const profile = await mkdtemp(join(tmpdir(),'atto-jspi-e2e-'));
+const allowed = new Set([
+  'runner-worker.js','actor-abi-version.js','guest.js','tenant-actor-host.js','actor-host.js',
+  'task-host.js','wasm-memory-admission.js'
+]);
+const server = createServer(async (req,res)=>{
+  const path = new URL(req.url,'http://localhost').pathname;
+  if (req.method !== 'GET') { res.writeHead(405); res.end(); return; }
+  if (path === '/play/') {
+    res.writeHead(200,{'Content-Type':'text/html'});
+    res.end('<!doctype html><title>Atto JSPI worker integration</title>');
+    return;
+  }
+  const m = /^\/play\/src\/([A-Za-z0-9-]+\.js)$/.exec(path);
+  if (!m || !allowed.has(m[1])) {res.writeHead(404);res.end();return;}
+  try {
+    const bytes=await readFile(new URL('../src/'+m[1], import.meta.url));
+    res.writeHead(200,{'Content-Type':'text/javascript','X-Content-Type-Options':'nosniff'});
+    res.end(bytes);
+  } catch {res.writeHead(404);res.end();}
+});
+const delay = ms => new Promise(r=>setTimeout(r,ms));
+const withDeadline = async(p,ms=8000)=>{
+  let timer;
+  try{return await Promise.race([p,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('browser test deadline')),ms);})]);}
+  finally{clearTimeout(timer);}
+};
+let chrome,socket,started=false;
+try {
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  started=true;
+  const url='http://127.0.0.1:'+server.address().port+'/play/';
+  chrome=spawn(process.env.CHROME_BIN||'chromium',[
+    '--headless=new','--no-sandbox','--disable-dev-shm-usage','--disable-gpu',
+    '--no-first-run','--no-proxy-server','--remote-debugging-port=0',
+    '--user-data-dir='+profile,'about:blank'
+  ],{stdio:['ignore','ignore','pipe']});
+  let err='';
+  chrome.stderr.on('data',b=>{err=(err+b.toString()).slice(-4000);});
+  chrome.on('error',e=>{err+=e.message;});
+  let port;
+  for(let i=0;i<120;i++){
+    if(chrome.exitCode!==null)throw Error('Chromium exited: '+err);
+    try {
+      port=Number((await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0]);
+      if(port>0)break;
+    } catch {}
+    await delay(100);
+  }
+  assert.ok(port>0,'Chromium debug endpoint unavailable '+err);
+  const pages=await (await fetch('http://127.0.0.1:'+port+'/json/list')).json();
+  const target=pages.find(p=>p.type==='page'&&p.webSocketDebuggerUrl);
+  assert.ok(target,'No browser page');
+  socket=new WebSocket(target.webSocketDebuggerUrl);
+  await withDeadline(new Promise((resolve,reject)=>{
+    socket.addEventListener('open',resolve,{once:true});
+    socket.addEventListener('error',reject,{once:true});
+  }));
+  const pending=new Map();let id=0;
+  socket.addEventListener('message',e=>{
+    const result=JSON.parse(e.data),p=pending.get(result.id);
+    if(!p)return;
+    pending.delete(result.id);
+    if(result.error)p.reject(Error(result.error.message));else p.resolve(result.result);
+  });
+  const command=(method,params={})=>withDeadline(new Promise((resolve,reject)=>{
+    const next=++id;pending.set(next,{resolve,reject});
+    socket.send(JSON.stringify({id:next,method,params}));
+  }));
+  const evaluate=async expression=>{
+    const x=await command('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});
+    if(x.exceptionDetails)throw Error('Browser evaluation failed: '+(x.exceptionDetails.text||JSON.stringify(x.exceptionDetails)));
+    return x.result.value;
+  };
+  await command('Page.enable');
+  await command('Page.navigate',{url});
+  await delay(250);
+  // These are compiler-produced guest Wasm files, never hand-written stubs.
+  // The combined private carrier compiles each .atto fixture with attoc first.
+  const fixtures=[
+    ['timer','./async-fixtures/suspends-await.wasm',true],
+    ['two-tasks','./async-fixtures/task-future.wasm',true],
+    ['barrier','./async-fixtures/barrier.wasm',false]
+  ];
+  for(const [label,relative,hasOutput] of fixtures){
+    const bytes=[...await readFile(new URL(relative,import.meta.url))];
+    assert.ok(bytes.length>8,label+' guest Wasm missing');
+    const result=await evaluate(`(async()=>{
+      const wasm=new Uint8Array(${JSON.stringify(bytes)});
+      if(!WebAssembly.validate(wasm))throw Error('compiler emitted invalid Wasm');
+      const worker=new Worker('/play/src/runner-worker.js',{type:'module'});
+      try{return await new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>reject(Error('compiled JSPI guest timed out')),5000);
+        worker.onmessage=e=>{clearTimeout(timer);resolve(e.data);};
+        worker.onerror=e=>{clearTimeout(timer);reject(Error(e.message||'tenant worker error'));};
+        worker.postMessage({wasm});
+      });}finally{worker.terminate();}
+    })()`);
+    assert.equal(result.ok,true,label+': '+result.message);
+    assert.equal(result.value,'42',label+' return result');
+    assert.equal(result.actors,0,label+' must not run in an actor instance');
+    assert.ok(result.cooperativeYields>=1,label+' never handed off scheduler');
+    if(hasOutput)assert.equal(result.stdout,'42\n',label+' stdout');
+    console.log('PASS: compiled Atto '+label+' executed and suspended in current JSPI tenant host');
+  }
+} finally {
+  try {socket?.close();} catch {}
+  if(chrome&&chrome.exitCode===null){
+    const p=new Promise(resolve=>chrome.once('close',resolve));
+    chrome.kill('SIGKILL');
+    await withDeadline(p,3000).catch(()=>{});
+  }
+  if(started)await new Promise(resolve=>server.close(resolve));
+  await rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:100});
+}

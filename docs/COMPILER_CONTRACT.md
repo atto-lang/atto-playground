@@ -92,3 +92,12 @@ The earlier M0 guest restriction requiring exactly the type/function/export/code
 `src/wasm-memory-admission.js` parses the verified guest Wasm bytes **before** the first guest instance is constructed. The tenant runner rejects memory64, shared, unbounded and multiple memories, malformed declarations and declared Wasm32 maxima exceeding **16 × 64 KiB pages (1 MiB)**. This matches the pinned v2 class/string heap budget; it is not a configurable actor arena.
 
 Every actor is still a separate Wasm instance with separate globals. A legacy scalar-only actor guest may have **no linear memory at all** until `atto-source.rs#61` is rebuilt and vendored through the compiler receipt gate; the planned updated emitter exports one bounded 64 KiB memory for those actors. There is no compiler-managed suspended stack, actor-local preemption or general `await` support in v2. On a non-yielding Wasm call, only the parent deadline can terminate the entire worker.
+
+## Experimental JSPI task host on the tenant runner
+
+The runtime now recognizes the separately versioned `atto.async` custom section with **exactly one payload byte `02`**. It grants a bounded, scope-owned JSPI task host only when that marker and the requested async imports/exports are consistent. It refuses duplicates, unknown markers, unmarked async imports, forged task entrypoints, and JSPI capabilities combined with actor tables, actor imports/exports, or actor pipelines. The `atto.actor.abi=03 00` marker remains explicitly **unsupported** by the v2 host.
+
+The implementation uses native `WebAssembly.Suspending` and `WebAssembly.promising`, not a JavaScript transcription of Atto code. Every executed `atto.cooperate` yields through a new Worker event-loop turn, including immediate scalar values. The task scope enforces caps and cancels outstanding futures when `main` exits. Unsupported JSPI browsers fail closed with `E_ASYNC`.
+
+**Provenance/availability boundary:** this is the host-side integration of the previously tested private JSPI experiment. The pinned compiler in this branch is unchanged and is **not claimed to emit** `atto.async/2` or source-level `suspends`. No actor is scheduled on an async task stack, no actor-owned continuation is generated, and the ABI v3 `actor_resume(fuel_budget)` proposal is not implemented. Browser tests use a real core-Wasm fixture, not source-compiled Atto. Source-compiler PR #50 and associated verified binary still require reconciliation with current compiler `main`, independent review and approved provenance before inclusion.
+
