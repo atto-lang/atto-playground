@@ -136,7 +136,15 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     check();
   }
 
+  function getOrCreate(type, namespace, applicationKey) {
+    const ref = registry.get_or_create({
+      namespace, actor_type: type, application_key: applicationKey
+    });
+    // Exact physical incarnation, not a virtual ref, for existing i32 ABI.
+    return registry.slot_for(ref);
+  }
+
   const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
-  return { spawn, send, drain, close, isLive, retire, registry,
+  return { spawn, send, getOrCreate, drain, close, isLive, retire, registry,
     get count() { return actors.length; } };
 }
