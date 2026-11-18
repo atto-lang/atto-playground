@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTenantActorHost } from '../src/tenant-actor-host.js';
+import { guestImports } from '../src/guest.js';
 
 // This constructs a real, minimal core-Wasm actor module; no stubbed guest
 // instances or JavaScript reimplementation of Wasm actor memory.
@@ -200,4 +201,78 @@ test('keyed failed tenant guest releases memory and can be replaced at new incar
   assert.throws(() => host.registry.get_or_create(key), /spawn admission closed/);
   assert.throws(() => host.registry.send(first, 2n), /E_ACTOR_REF_STALE/);
   host.close();
+});
+
+function keyedGuestBridge() {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const bridge = guestImports(module, out, host);
+  const main = new WebAssembly.Instance(module, bridge.imports);
+  bridge.bind(main);
+  const memory = new Uint8Array(main.exports.memory.buffer);
+  const bytes = new TextEncoder();
+  const put = (text, offset) => {
+    const data = bytes.encode(text);
+    memory.set(data, offset);
+    return (BigInt(offset) << 32n) | BigInt(data.length);
+  };
+  return { host, out, bridge: bridge.imports.atto, memory, put };
+}
+
+test('guest import uses keyed registry to reuse one real tenant Wasm actor activation', async () => {
+  const { host, out, bridge, put } = keyedGuestBridge();
+  const namespace = put('vhost', 64), key = put('payments', 96);
+  const a = bridge.actor_get_or_create(0, namespace, key);
+  const b = bridge.actor_get_or_create(0, namespace, key);
+  assert.equal(a, b);
+  assert.equal(host.registry.size, 1);
+  assert.equal(host.count, 1);
+  bridge.actor_send(a, 40n);
+  bridge.actor_send(b, 2n);
+  assert.equal(await host.drain(), null);
+  assert.equal(out.text, '12', 'same Wasm instance increments its private counter twice');
+  host.close();
+});
+
+test('guest import namespace and application keys have unambiguous identities', async () => {
+  const { host, bridge, put } = keyedGuestBridge();
+  const a = bridge.actor_get_or_create(0, put('a:b', 64), put('c', 96));
+  const b = bridge.actor_get_or_create(0, put('a', 128), put('b:c', 160));
+  assert.notEqual(a, b);
+  assert.equal(host.registry.size, 2);
+  assert.equal(host.count, 2);
+  host.close();
+});
+
+test('guest import rejects malformed pointer and length before activation', () => {
+  const { host, bridge, put, memory } = keyedGuestBridge();
+  const namespace = put('tenant', 64), key = put('q', 96);
+  const encode = (offset, size) => (BigInt(offset) << 32n) | BigInt(size);
+  memory[150] = 0xff;
+  const invalid = [
+    [encode(65530, 30), key, /E_ACTOR_KEY/],
+    [namespace, encode(500000, 1), /E_ACTOR_KEY/],
+    [encode(64, 0), key, /E_ACTOR_KEY/],
+    [namespace, encode(1000, 4097), /E_ACTOR_KEY/],
+    [namespace, encode(150, 1), /E_ACTOR_KEY/],
+  ];
+  for (const [ns, k, reason] of invalid) {
+    assert.throws(() => bridge.actor_get_or_create(0, ns, k), reason);
+  }
+  assert.throws(() => bridge.actor_get_or_create(5, namespace, key), /unknown actor type|E_ACTOR_KEY/);
+  assert.equal(host.count, 0, 'no malformed key may allocate an actor');
+  host.close();
+});
+
+test('guest import fails closed after drain and with no actor capability', async () => {
+  const { host, bridge, put } = keyedGuestBridge();
+  const namespace = put('tenant', 64), key = put('q', 96);
+  assert.equal(await host.drain(), null);
+  assert.throws(() => bridge.actor_get_or_create(0, namespace, key), /spawn admission closed/);
+  assert.equal(host.count, 0);
+  host.close();
+  const module = new WebAssembly.Module(actorFixture());
+  const unprivileged = guestImports(module, { text: '', truncated: false });
+  assert.throws(() => unprivileged.imports.atto.actor_get_or_create(0, namespace, key), /E_ACTOR/);
 });
