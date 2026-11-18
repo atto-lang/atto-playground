@@ -11,6 +11,7 @@
  * must terminate the tenant worker if a guest loops forever.
  */
 import { createLocalActorRegistry } from './local-actor-registry.js';
+import { createLocalActorGroups, createLocalPubSub } from './local-actor-groups.js';
 import { appendCapped, describePanic, guestImports } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
 
@@ -169,6 +170,7 @@ export function createTenantActorHost({ module, names, out }) {
 
   function close() {
     closed = true;
+    groups.close();
     registry.close();
     for (const a of actors) {
       a.mailbox.length = 0;
@@ -186,8 +188,10 @@ export function createTenantActorHost({ module, names, out }) {
   }
 
   const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
+  const groups = createLocalActorGroups({ registry });
+  const pubsub = createLocalPubSub(groups);
   return {
-    spawn, send, getOrCreate, drain, close, isLive, retire, registry,
+    spawn, send, getOrCreate, drain, close, isLive, retire, registry, groups, pubsub,
     get count() { return actors.length; },
     get memoryBytes() {
       return actors.reduce((sum, a) => sum + (a.instance?.exports.memory?.buffer.byteLength ?? 0), 0);
