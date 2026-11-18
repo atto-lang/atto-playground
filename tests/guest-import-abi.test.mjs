@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {PAGES_ASSETS} from '../scripts/package-pages.mjs';
 import assert from 'node:assert/strict';
 import { validateGuestImportABI } from '../src/guest-import-abi.js';
 import { run_tenant } from '../src/node-tenant-runner.mjs';
@@ -67,4 +68,10 @@ test('type/parser failures and import reflection mismatch deny before execution'
   assert.throws(() => validateGuestImportABI(bytes.subarray(0, 3), new WebAssembly.Module(bytes)), /invalid Wasm bytes/);
   const malformed = Uint8Array.from([...bytes, 0, 0x80, 0]);
   assert.throws(() => validateGuestImportABI(malformed, new WebAssembly.Module(bytes)), /noncanonical LEB32/);
+});
+
+test('static playground release ships the verifier imported by tenant Worker', () => {
+  for (const asset of ['src/runner-worker.js', 'src/guest-import-abi.js']) {
+    assert.equal(PAGES_ASSETS.filter(x => x === asset).length, 1, 'missing/duplicate runtime asset '+asset);
+  }
 });
