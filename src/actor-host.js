@@ -153,7 +153,10 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   const admittedWasm = new Uint8Array(wasm);
   const actorMemoryBytesPerInstance = guestMemoryBudgetBytes(admittedWasm);
   const actors = [];
-  let actorMemoryBytes = 0, pendingMessages = 0, droppedMessages = 0, restartCount = 0;
+  // Reserved memory includes actors whose Worker termination has not been
+  // physically acknowledged. Do not recycle that reservation mid-run.
+  let actorMemoryBytes = 0, retiredActorMemoryBytes = 0;
+  let pendingMessages = 0, droppedMessages = 0, restartCount = 0;
   let fault = null, closed = false, draining = false, terminal = false, terminalResult = null;
   const drainWaiters = [];
   const workerIdentities = new Set();
@@ -178,7 +181,13 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function detach(a) {
     if (a.initTimer !== null) { clearTimer(a.initTimer); a.initTimer = null; }
     const worker=a.worker; a.worker=null;
-    if(worker){worker.onmessage=worker.onerror=worker.onmessageerror=null;try{worker.terminate();}catch{}workerIdentities.delete(worker);}
+    if(worker){
+      // A detached Worker has no acknowledged physical-quiescence barrier.
+      retiredActorMemoryBytes+=actorMemoryBytesPerInstance;
+      worker.onmessage=worker.onerror=worker.onmessageerror=null;
+      try{worker.terminate();}catch{}
+      workerIdentities.delete(worker);
+    }
   }
   function startWorker(a) {
     let worker=null, ownsWorker=false;
@@ -242,6 +251,15 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       terminalFailure(a,'E_ACTOR_GENERATION_EXHAUSTED: generation cannot wrap',TERMINATION_REASONS.RESTART_LIMIT);
       return true;
     }
+    // Worker.terminate() has no physical-quiescence receipt. Charge every
+    // replacement in addition to any retiring Worker, and hold retired bytes
+    // for the lifetime of this execution. A previously scheduled replacement
+    // without a live Worker already holds its future-instance reservation.
+    const retiring=targets.filter(x=>x.worker!==null).length;
+    if(actorMemoryBytes+retiring*actorMemoryBytesPerInstance>MAX_TOTAL_ACTOR_MEMORY_BYTES){
+      terminalFailure(a,'E_ACTOR_RECLAIM_BUDGET: insufficient replacement headroom',TERMINATION_REASONS.RESTART_LIMIT);
+      return true;
+    }
     restartHistory.push(time);restartCount++;
     const delay=Math.min(supervisor.maxBackoffMs,
       supervisor.initialBackoffMs*2**Math.min(30,restartHistory.length-1));
@@ -249,6 +267,9 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       const lost=target.sent-target.done;
       pendingMessages-=lost;droppedMessages+=lost;
       cancelRestart(target);target.state='restarting';
+      if(target.worker!==null){
+        actorMemoryBytes+=actorMemoryBytesPerInstance;
+      }
       detach(target);target.generation++;target.ready=false;
       target.sent=0;target.done=0;
       const generation=target.generation;
@@ -358,13 +379,19 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if(draining || terminal)throw new Error('E_ACTOR_RESTART_CLOSED: actor host is draining or has already drained');
     if(a.state!=='running'||!a.ready||a.done!==a.sent)throw new Error('E_ACTOR_RESTART_BUSY: actor must be ready with an empty mailbox');
     if(a.generation>=MAX_ACTOR_GENERATION){a.state='failed';fail(a,'E_ACTOR_GENERATION_EXHAUSTED');detach(a);throw new Error('E_ACTOR_GENERATION_EXHAUSTED: actor generation cannot wrap');}
+    if(actorMemoryBytes+actorMemoryBytesPerInstance>MAX_TOTAL_ACTOR_MEMORY_BYTES){
+      throw new Error('E_ACTOR_RECLAIM_BUDGET: insufficient replacement headroom');
+    }
+    // The retiring Worker and the replacement must both be budgeted until
+    // there is an independently verified backend-specific reclaim barrier.
+    actorMemoryBytes+=actorMemoryBytesPerInstance;
     a.state='stopping';detach(a);a.generation++;a.sent=0;a.done=0;
     try{startWorker(a);return encodeActorRef(a.id,a.generation);}
     catch(error){a.state='failed';fail(a,'E_ACTOR_RESTART: worker restart failed');throw error;}
   }
 
-  /** Supervisor/host-only stop: invalidate handle, detach child, reclaim its
-   * reservation, and explicitly count discarded in-flight messages. */
+  /** Supervisor/host-only stop: invalidate the handle, detach the Worker,
+   * retain its unverified memory reservation, and account for dropped mail. */
   function stop(handle) {
     if(closed)throw new Error('E_ACTOR: actor host closed');
     const a=resolve(handle);
@@ -374,7 +401,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     const lost=a.sent-a.done;
     pendingMessages-=lost;droppedMessages+=lost;
     a.state='stopped';detach(a);
-    actorMemoryBytes-=actorMemoryBytesPerInstance;
+    // No immediate refund: termination is requested but physical reclamation
+    // is unverified. Slot admission uses actorMemoryBytes until close().
     record({kind:'stopped',actorId:a.id,generation:a.generation,
       reason:TERMINATION_REASONS.NORMAL,droppedMessages:lost});
     check();
@@ -440,6 +468,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       detach(a);
     }
     workerIdentities.clear();
+    // No further admissions are possible after close; drop logical budget
+    // reservations but keep the unverified termination total observable.
     actorMemoryBytes = 0;
     pendingMessages = 0;
   }
@@ -448,6 +478,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     get count() { return actors.length; },
     get events() { return Object.freeze([...supervisorEvents]); },
     get stats() { return Object.freeze({ actors: actors.length, actorMemoryBytes,
+      retiredActorMemoryBytes,physicalReclamationVerified:false,
       pendingMessages,droppedMessages,restartCount,
       restartPending:actors.filter(a=>a.restartTimer!==null).length,
       maxActorMemoryBytes: MAX_TOTAL_ACTOR_MEMORY_BYTES,
