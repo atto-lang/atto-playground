@@ -4,9 +4,10 @@ import { readPrograms, saveProgram, deleteProgram, exportPrograms, importProgram
  * only to this origin's localStorage, never sent to a program service.
  */
 export function installProgramPicker({ selector, editor, nameInput, saveButton, deleteButton,
-  savedGroup, status, loadSample, exportButton = null, importButton = null, importFile = null }) {
+  savedGroup, status, loadSample, exportButton = null, importButton = null, importFile = null,
+  onSelectionChange = () => {} }) {
   let currentSelection = 'hello', customMode = false, selectedName = null;
-  let cleanSource = '', generation = 0;
+  let cleanSource = '', generation = 0, writingSource = false;
   const tell = message => { status.textContent = message; };
   const storage = () => window.localStorage; // getter may throw: caught at use sites
   const isDirty = () => customMode && (editor.value !== cleanSource ||
@@ -14,10 +15,20 @@ export function installProgramPicker({ selector, editor, nameInput, saveButton, 
   // Warn on program switches, not beforeunload: browser modal unload dialogs
   // blocked real Chromium automation and cannot be reliably customized.
   const edit = source => {
-    editor.value = source;
-    editor.dispatchEvent(new Event('input', { bubbles: true }));
-    cleanSource = source;
+    writingSource = true;
+    try {
+      editor.value = source;
+      editor.dispatchEvent(new Event('input', { bubbles: true }));
+      cleanSource = source;
+    } finally { writingSource = false; }
   };
+  // User edits invalidate outstanding sample fetches without overwriting their work.
+  editor.addEventListener('input', () => {
+    if (writingSource) return;
+    ++generation;
+    selector.value = currentSelection;
+    onSelectionChange(false);
+  });
   const controls = (enabled, savedName = null) => {
     customMode = enabled;
     selectedName = savedName;
@@ -34,8 +45,7 @@ export function installProgramPicker({ selector, editor, nameInput, saveButton, 
     selector.value = selected;
     return programs;
   }
-  async function choose(value) {
-    const request = ++generation;
+  async function choose(value, request) {
     if (value === 'custom:new') {
       // Keep the current source when creating a custom copy of a sample.
       controls(true);
@@ -67,8 +77,16 @@ export function installProgramPicker({ selector, editor, nameInput, saveButton, 
       selector.value = currentSelection;
       return;
     }
-    try { await choose(requested); }
-    catch (error) { tell('Cannot load program: ' + error.message); selector.value = currentSelection; }
+    const request = ++generation;
+    onSelectionChange(true);
+    try { await choose(requested, request); }
+    catch (error) {
+      if (request !== generation) return;
+      tell('Cannot load program: ' + error.message);
+      selector.value = currentSelection;
+    } finally {
+      if (request === generation) onSelectionChange(false);
+    }
   });
   saveButton.addEventListener('click', () => {
     if (!customMode) return;
@@ -138,9 +156,13 @@ export function installProgramPicker({ selector, editor, nameInput, saveButton, 
         controls(false);
         edit(sharedCode);
         currentSelection = 'hello';
+        onSelectionChange(false);
         return;
       }
-      await choose('hello');
+      const request = ++generation;
+      onSelectionChange(true);
+      try { await choose('hello', request); }
+      finally { if (request === generation) onSelectionChange(false); }
     }
   };
 }
