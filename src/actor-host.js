@@ -14,8 +14,21 @@ const I64_MIN = -(2n ** 63n), I64_MAX = 2n ** 63n - 1n;
 
 export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Worker,
   workerUrl = new URL('./actor-worker.js', import.meta.url) }) {
-  if (!(wasm instanceof Uint8Array)) throw new TypeError('actor host needs the guest bytes');
-  if (!Array.isArray(names) || !names.length) throw new Error('actor host needs an actor table');
+  if (!(wasm instanceof Uint8Array) || !(wasm.buffer instanceof ArrayBuffer)) {
+    throw new TypeError('E_GUEST_ABI: actor host requires private Uint8Array guest bytes');
+  }
+  // Snapshot the original guest before any async Worker initialization. A
+  // caller must not substitute a larger or different module after admission.
+  if (wasm.byteLength < 8 || wasm.byteLength > (1 << 20)) {
+    throw new Error('E_GUEST_ABI: invalid/oversized guest bytes');
+  }
+  const admittedWasm = new Uint8Array(wasm);
+  if (!Array.isArray(names) || !names.length || names.length > 256 ||
+      !names.every(name => typeof name === 'string' &&
+        /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(name))) {
+    throw new Error('E_ACTOR: invalid actor table');
+  }
+  const admittedNames = Object.freeze([...names]);
   const actors = [];
   let fault = null, settle = null, closed = false, draining = false, admissionClosed = false;
 
@@ -78,17 +91,17 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function spawn(type) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
     if (admissionClosed) throw new Error('E_ACTOR: spawn admission closed after main returned');
-    if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
+    if (!Number.isInteger(type) || type < 0 || type >= admittedNames.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
-    const a = { ref, type, name: names[type], sent: 0, done: 0, ready: false, failed: false, terminated: false, worker: null };
+    const a = { ref, type, name: admittedNames[type], sent: 0, done: 0, ready: false, failed: false, terminated: false, worker: null };
     a.worker = new WorkerImpl(workerUrl, { type: 'module' });
     a.worker.onmessage = event => onMessage(a, event.data);
     a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
     a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
     // each actor gets a private copy of the module bytes
     try {
-      a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type });
+      a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(admittedWasm), type });
     } catch (error) {
       // An unsuccessful handoff must not orphan the newly allocated Worker.
       terminate(a);
