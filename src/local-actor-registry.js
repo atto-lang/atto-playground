@@ -181,6 +181,26 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     return true;
   }
 
+  // Trusted host adapter for the existing v2 guest ABI's i32 slot.
+  // Never pass this function to guest code or serialize physical refs.
+  function slot_for(ref) {
+    checkedOpen();
+    const target = ref && typeof ref === 'object' ? physical.get(ref) : null;
+    if (!target || target.epoch !== epoch) {
+      throw new Error('E_ACTOR_REF_STALE: foreign or forged physical actor reference');
+    }
+    const id = identity(normalize(ref));
+    const entry = entries.get(id);
+    if (!entry || entry.ref !== ref || !isLive(target.slot)) {
+      throw new Error('E_ACTOR_REF_STALE: activation no longer live');
+    }
+    checkedOpen();
+    if (entries.get(id) !== entry) {
+      throw new Error('E_ACTOR_REF_STALE: activation retired during resolution');
+    }
+    return target.slot;
+  }
+
   function send_to(ref, value) {
     checkedOpen();
     const target = ref && typeof ref === 'object' ? physical.get(ref) : null;
@@ -210,7 +230,7 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
   }
 
   return Object.freeze({
-    ref_for, lookup, register, get_or_create, unregister, send: send_to, close,
+    ref_for, lookup, register, get_or_create, unregister, send: send_to, slot_for, close,
     get size() { return entries.size; }
   });
 }
