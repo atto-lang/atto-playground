@@ -27,8 +27,10 @@ or a distributed Orleans-compatible actor directory.
 - A monotonic global BigInt incarnation counter and private registry epoch
   prevent ABA without retaining an unbounded tombstone entry per key.
   Physical slots are **not reused** during the lifetime of a registry.
-- Failed activation rolls back the provisional actor. If retirement itself
-  becomes uncertain, the registry closes to prevent a second keyed owner.
+- Failed activation rolls back the provisional actor. Retirement also
+  rechecks physical liveness: a callback that returns without stopping a live
+  actor quarantines the registry. If retirement itself becomes uncertain, the
+  registry closes to prevent a second keyed owner.
 - Explicit retirement may **drop previously admitted but unprocessed mail**:
   admission is not delivery, durability, or exactly-once execution.
 
