@@ -55,7 +55,7 @@ pub fnc main(): int {
     second.send(2);
     return 0;
 }`);
-assert.deepEqual(duplicate, { result: 0n, fault: null, stdout: '40\\n42\\n', actors: 1 });
+assert.deepEqual(duplicate, { result: 0n, fault: null, stdout: '40\n42\n', actors: 1 });
 console.log('PASS compiled keyed registry: one Wasm actor, one typed receive, two on-arm messages');
 
 const separated = await run(header + `
@@ -66,7 +66,7 @@ pub fnc main(): int {
     second.send(2);
     return 0;
 }`);
-assert.deepEqual(separated, { result: 0n, fault: null, stdout: '40\\n2\\n', actors: 2 });
+assert.deepEqual(separated, { result: 0n, fault: null, stdout: '40\n2\n', actors: 2 });
 console.log('PASS compiled keyed registry: tenant namespace isolation');
 
 for (const [label, source, expected] of [
