@@ -218,3 +218,176 @@ test('real actor host routes keyed sends through its bounded FIFO worker protoco
   host.close();
   assert.throws(() => host.registry.get_or_create(v), /E_ACTOR_REGISTRY_CLOSED/);
 });
+
+test('shutdown during spawn cancels publication and retires the provisional actor', () => {
+  let registry;
+  let retired = 0;
+  let live = true;
+  registry = createLocalActorRegistry({
+    names: ['Queue'],
+    spawn() { registry.close(); return 0; },
+    send() { assert.fail('no delivery after shutdown'); },
+    isLive() { return live; },
+    retire(slot) { assert.equal(slot, 0); retired++; live = false; return true; }
+  });
+  assert.throws(() => registry.register(key('race')), /E_ACTOR_REGISTRY_CLOSED/);
+  assert.equal(retired, 1, 'rolled back actor exactly once');
+  assert.equal(live, false);
+  assert.equal(registry.size, 0);
+});
+
+test('shutdown during a liveness callback cannot publish the activation', () => {
+  let registry, retired = 0;
+  registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send() {},
+    isLive() { registry.close(); return true; },
+    retire() { retired++; return true; }
+  });
+  assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
+  assert.equal(retired, 1);
+  assert.equal(registry.size, 0);
+});
+
+test('liveness exceptions roll back allocation and permit a fresh attempt', () => {
+  let slot = 0, retired = 0, throwOnce = true;
+  const registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return slot++; },
+    send() {},
+    isLive() {
+      if (throwOnce) { throwOnce = false; throw new Error('synthetic liveness error'); }
+      return true;
+    },
+    retire() { retired++; return true; }
+  });
+  assert.throws(() => registry.get_or_create(key('q')), /synthetic liveness/);
+  assert.equal(retired, 1);
+  const ref = registry.get_or_create(key('q'));
+  assert.equal(ref.incarnation, 1n);
+  assert.equal(registry.size, 1);
+});
+
+test('failed rollback quarantines registry instead of permitting duplicate owners', () => {
+  let registry;
+  registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { registry.close(); return 0; },
+    send() {}, isLive() { return true; },
+    retire() { throw new Error('cannot stop actor'); }
+  });
+  assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_ROLLBACK/);
+  assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
+});
+
+test('failed retirement quarantines registry and invalidates physical ref', () => {
+  const registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send() { assert.fail('must not deliver after uncertain retirement'); },
+    isLive() { return true; },
+    retire() { throw new Error('cannot retire'); }
+  });
+  const registration = registry.register(key('q'));
+  assert.throws(() => registry.unregister(key('q'), registration.token), /E_ACTOR_REGISTRY_RETIRE_FAILED/);
+  assert.equal(registry.size, 0);
+  assert.throws(() => registry.send(registration.ref, 3n), /E_ACTOR_REGISTRY_CLOSED/);
+  assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
+});
+
+test('physical slot reuse for another key fails closed without retiring its owner', () => {
+  let retired = 0;
+  const registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send() {}, isLive() { return true; },
+    retire() { retired++; return true; }
+  });
+  const owner = registry.get_or_create(key('first'));
+  assert.throws(() => registry.get_or_create(key('second')), /E_ACTOR_REGISTRY_SLOT_REUSE/);
+  assert.equal(registry.lookup(key('first')), owner);
+  assert.equal(registry.lookup(key('second')), null);
+  assert.equal(retired, 0);
+});
+
+test('slot reuse is prohibited even after retirement within the same registry epoch', () => {
+  const registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send() {}, isLive() { return true; }, retire() { return true; }
+  });
+  const first = registry.register(key('q'));
+  assert.equal(registry.unregister(key('q'), first.token), true);
+  assert.throws(() => registry.register(key('q')), /E_ACTOR_REGISTRY_SLOT_REUSE/);
+});
+
+test('actor name table is snapshotted, never mutable by registry callers', () => {
+  const names = ['Queue'];
+  const f = fixture(names);
+  names[0] = 'Z';
+  assert.throws(() => f.registry.ref_for(key('x'.repeat(4091), 'n')), /E_ACTOR_KEY/);
+  assert.equal(f.creates, 0);
+});
+
+test('mass key churn has globally unique generations without retaining per-key tombstones', () => {
+  const f = fixture();
+  let last = 0n;
+  for (let i = 0; i < 512; i++) {
+    const registration = f.registry.register(key('queue-' + i));
+    assert.ok(registration.ref.incarnation > last);
+    last = registration.ref.incarnation;
+    assert.equal(f.registry.unregister(key('queue-' + i), registration.token), true);
+  }
+  assert.equal(f.registry.size, 0);
+  assert.equal(f.creates, 512);
+  assert.equal(f.registry.get_or_create(key('queue-0')).incarnation, 513n);
+});
+
+test('strict Unicode key identity preserves distinct code point sequences', () => {
+  const f = fixture();
+  const nfc = f.registry.get_or_create(key('caf\u00e9'));
+  const nfd = f.registry.get_or_create(key('cafe\u0301'));
+  assert.notEqual(nfc, nfd, 'normalization is never implicit');
+  assert.equal(f.registry.lookup(key('caf\u00e9')), nfc);
+  assert.equal(f.registry.lookup(key('cafe\u0301')), nfd);
+});
+
+test('virtual refs are snapshots, and cloned physical refs are not capabilities', () => {
+  const f = fixture();
+  const mutable = key('orders');
+  const v = f.registry.ref_for(mutable);
+  mutable.application_key = 'payments';
+  assert.equal(v.key.application_key, 'orders');
+  const p = f.registry.get_or_create(v);
+  assert.throws(() => f.registry.send(structuredClone(p), 1n), /E_ACTOR_REF_STALE/);
+  f.registry.send(p, 2n);
+  assert.deepEqual(f.deliveries, [[0, 2n]]);
+});
+
+test('unsupported async activation callback fails without a published mapping', () => {
+  const registry = createLocalActorRegistry({
+    names: ['Queue'],
+    spawn() { return Promise.resolve(0); },
+    send() {}, isLive() { return true; }, retire() {}
+  });
+  assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_DEAD/);
+  assert.equal(registry.size, 0);
+});
+
+test('worker creation failure releases Worker and does not consume an actor slot', () => {
+  const workers = [];
+  class FailingWorker {
+    constructor() { this.dead = false; workers.push(this); }
+    postMessage() {
+      if (workers.length === 1) throw new Error('synthetic structured clone failure');
+    }
+    terminate() { this.dead = true; }
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['Queue'], out: { text: '', truncated: false },
+    WorkerImpl: FailingWorker, workerUrl: 'fake-worker.js'
+  });
+  assert.throws(() => host.registry.get_or_create(key('q')), /synthetic structured clone/);
+  assert.equal(host.count, 0);
+  assert.equal(workers[0].dead, true);
+  assert.equal(host.registry.get_or_create(key('q')).kind, 'ActorRef');
+  assert.equal(host.count, 1);
+  host.close();
+  assert.equal(workers[1].dead, true);
+});
