@@ -1,0 +1,21 @@
+// Floats are IEEE binary64. An int operand widens to float, and printing
+// follows Java's Double.toString (int / int stays undecided: spec S-25).
+fnc area(float r): float {
+  return 3.141592653589793 * r * r;
+}
+
+pub fnc main(): int {
+  stdio.println(area(2.0));
+  stdio.println(7.0 / 2);
+  stdio.println(0.1 + 0.2);
+  stdio.println(1e7);
+  stdio.println(1.0 / 0.0);
+  let x = 1.0;
+  let steps = 0;
+  while x < 1000.0 do
+    x = x * 1.5;
+    steps = steps + 1;
+  done
+  stdio.println(x);
+  return steps;
+}

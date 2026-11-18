@@ -1,0 +1,28 @@
+// match: canonical 'over ... on' arms run in source order; guards run only
+// after their pattern matched; the checker requires every case be covered.
+fnc fizz(int n): string {
+  match n over
+    on 15 -> { return "FizzBuzz"; }
+    on 3 -> { return "Fizz"; }
+    on 5 -> { return "Buzz"; }
+    on _ -> { return "-"; }
+  end
+}
+
+fnc sign(int n): int {
+  match n
+    0 -> { return 0; }
+    k -> { return k > 0 ? 1 : -1; }
+  end
+}
+
+pub fnc main(): int {
+  for (let i = 1; i <= 5; i++) do
+    stdio.println(fizz(i));
+  done
+  match true
+    true -> { stdio.println("bool arms"); }
+    false -> { stdio.println("never"); }
+  end
+  return sign(-42) + 2;
+}
