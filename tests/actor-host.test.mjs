@@ -390,7 +390,7 @@ test('legacy actor host owns admitted Wasm bytes and actor names across late spa
   assert.equal(ref, 0);
   assert.deepEqual(instances[0].sent[0].wasm,
     new Uint8Array([0,97,115,109,1,0,0,0]),
-    'Worker receives the validated-time byte snapshot');
+    'Worker receives the admitted private byte snapshot');
   const drained = host.drain();
   instances[0].onmessage({data:{kind:'fault',message:'E_PANIC: actor failed'}});
   assert.match(await drained, /E_PANIC: actor failed in actor Original#0/);
