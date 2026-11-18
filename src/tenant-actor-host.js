@@ -46,6 +46,10 @@ export function createTenantActorHost({ module, names, out }) {
     }
     a.failed = true;
     flush(a);
+    // A trapped/failed actor may have allocated guest linear memory.
+    // Never retain it as an inactive keyed activation.
+    a.mailbox.length = 0;
+    a.instance = null;
   }
   function checkMemory(a) {
     const memory = a.instance?.exports.memory;
@@ -110,14 +114,15 @@ export function createTenantActorHost({ module, names, out }) {
   }
 
   function retire(ref) {
-    if (!isLive(ref)) return false;
-    const actor = actors[ref];
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    if (closed || !actor) return false;
+    const wasLive = !actor.failed && actor.instance !== null;
     actor.failed = true;
     actor.mailbox.length = 0;
     actor.instance = null;
     actor.output.text = '';
     actor.output.truncated = false;
-    return true;
+    return wasLive;
   }
 
   /** Round-robin, one mailbox entry per actor per sweep. This yields the JS
