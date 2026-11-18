@@ -94,14 +94,24 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     return live && entries.get(id) === entry ? entry.ref : null;
   }
 
-  function rollback(slot) {
+  function retireChecked(slot, code) {
     try {
       retire(slot);
+      // A callback may return false, undefined, or even claim success while
+      // still leaving the physical actor alive. Check host liveness directly.
+      if (isLive(slot)) {
+        throw new Error('physical actor remains live after retirement');
+      }
     } catch (cause) {
-      // Never report rollback as successful if an actor may remain alive.
+      // With uncertain retirement, allowing a new owner would violate keyed
+      // actor uniqueness. Quarantine this registry for the rest of its epoch.
       close();
-      throw new Error('E_ACTOR_REGISTRY_ROLLBACK: unable to retire rejected activation', { cause });
+      throw new Error(code + ': registry quarantined after uncertain retirement', { cause });
     }
+  }
+
+  function rollback(slot) {
+    retireChecked(slot, 'E_ACTOR_REGISTRY_ROLLBACK');
   }
 
   function register(key) {
@@ -167,13 +177,7 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     const current = entries.get(id);
     if (!current || !token || current.token !== token) return false;
     entries.delete(id); // Stale cleanup cannot remove a successor.
-    try {
-      retire(current.slot);
-    } catch (cause) {
-      // Unknown physical liveness must never permit another keyed activation.
-      close();
-      throw new Error('E_ACTOR_REGISTRY_RETIRE_FAILED: registry quarantined', { cause });
-    }
+    retireChecked(current.slot, 'E_ACTOR_REGISTRY_RETIRE_FAILED');
     return true;
   }
 
