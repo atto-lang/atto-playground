@@ -367,3 +367,52 @@ test('overlapping drains fail closed instead of losing the original promise', as
   host.close();
   assert.equal(await host.drain(), 'E_ACTOR: actor host closed');
 });
+
+test('legacy actor host owns admitted Wasm bytes and actor names across late spawn', async () => {
+  const original = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
+  const names = ['Original'];
+  const instances = [];
+  class SnapshotWorker {
+    constructor() { this.sent = []; this.terminated = false; instances.push(this); }
+    postMessage(message) { this.sent.push(structuredClone(message)); }
+    terminate() { this.terminated = true; }
+  }
+  const host = createActorHost({
+    wasm: original, names, out: { text: '', truncated: false },
+    WorkerImpl: SnapshotWorker, workerUrl: 'snapshot-worker.js'
+  });
+  original[0] = 255;
+  names[0] = 'Attacker';
+  names.push('Injected');
+  assert.throws(() => host.spawn(1), /unknown actor type/,
+    'new actor types are not injected through the caller-owned array');
+  const ref = host.spawn(0);
+  assert.equal(ref, 0);
+  assert.deepEqual(instances[0].sent[0].wasm,
+    new Uint8Array([0,97,115,109,1,0,0,0]),
+    'Worker receives the validated-time byte snapshot');
+  const drained = host.drain();
+  instances[0].onmessage({data:{kind:'fault',message:'E_PANIC: actor failed'}});
+  assert.match(await drained, /E_PANIC: actor failed in actor Original#0/);
+  assert.equal(instances[0].terminated, true);
+  host.close();
+});
+
+test('legacy actor host refuses shared and oversized guest input before any Worker creation', () => {
+  let created = 0;
+  class CountingWorker { constructor() { created++; } }
+  const options = {
+    names:['Counter'], out:{text:'',truncated:false},
+    WorkerImpl:CountingWorker, workerUrl:'x'
+  };
+  assert.throws(() => createActorHost({...options,wasm:new Uint8Array((1<<20)+1)}),
+    /invalid\/oversized guest bytes/);
+  assert.throws(() => createActorHost({...options,wasm:new Uint8Array(7)}),
+    /invalid\/oversized guest bytes/);
+  if (typeof SharedArrayBuffer !== 'undefined') {
+    assert.throws(() => createActorHost({
+      ...options, wasm:new Uint8Array(new SharedArrayBuffer(8))
+    }), /requires private Uint8Array/);
+  }
+  assert.equal(created,0,'rejected inputs allocate no child Workers');
+});
