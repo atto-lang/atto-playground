@@ -10,6 +10,7 @@
  * There is NO preemption inside a guest call yet. The outer runner deadline
  * must terminate the tenant worker if a guest loops forever.
  */
+import { createLocalActorRegistry } from './local-actor-registry.js';
 import { appendCapped, describePanic, guestImports } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
 
@@ -103,6 +104,22 @@ export function createTenantActorHost({ module, names, out }) {
     a.sent++;
   }
 
+  function isLive(ref) {
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    return !closed && !!actor && !actor.failed && actor.instance !== null;
+  }
+
+  function retire(ref) {
+    if (!isLive(ref)) return false;
+    const actor = actors[ref];
+    actor.failed = true;
+    actor.mailbox.length = 0;
+    actor.instance = null;
+    actor.output.text = '';
+    actor.output.truncated = false;
+    return true;
+  }
+
   /** Round-robin, one mailbox entry per actor per sweep. This yields the JS
    * event loop between bounded groups of completed guest calls, never within
    * a guest Wasm invocation. Actor-to-actor sends are denied by guestImports.
@@ -147,6 +164,7 @@ export function createTenantActorHost({ module, names, out }) {
 
   function close() {
     closed = true;
+    registry.close();
     for (const a of actors) {
       a.mailbox.length = 0;
       a.instance = null;
@@ -154,8 +172,9 @@ export function createTenantActorHost({ module, names, out }) {
     }
   }
 
+  const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
   return {
-    spawn, send, drain, close,
+    spawn, send, drain, close, isLive, retire, registry,
     get count() { return actors.length; },
     get memoryBytes() {
       return actors.reduce((sum, a) => sum + (a.instance?.exports.memory?.buffer.byteLength ?? 0), 0);
