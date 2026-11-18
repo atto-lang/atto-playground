@@ -554,3 +554,42 @@ test('reentrant liveness probe may not overwrite a successor incarnation', () =>
   assert.notEqual(replacement, first.ref);
   assert.throws(() => registry.send(first.ref, 1n), /E_ACTOR_REF_STALE/);
 });
+
+
+test('real Worker host group/pubsub fanout preserves bounded FIFO and stale pruning', async () => {
+  const deliveries = [];
+  class TestWorker {
+    constructor() { this.alive = true; }
+    postMessage(data) {
+      if (data.kind === 'init') {
+        queueMicrotask(() => { if (this.alive) this.onmessage?.({ data: { kind: 'ready' } }); });
+      } else if (data.kind === 'mail') {
+        deliveries.push(data.value);
+        queueMicrotask(() => {
+          if (this.alive) this.onmessage?.({ data: { kind: 'done', sequence: data.sequence } });
+        });
+      }
+    }
+    terminate() { this.alive = false; }
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['Queue'], out: { text: '', truncated: false },
+    WorkerImpl: TestWorker, workerUrl: 'test-worker.js'
+  });
+  const k = key('q');
+  const registered = host.registry.register(k);
+  const topic = { namespace: 'tenant-a', actor_type: 0, group_name: 'updates' };
+  const membership = host.pubsub.subscribe(topic, registered.ref);
+  assert.deepEqual(host.groups.members(topic), [registered.ref]);
+  assert.deepEqual(host.pubsub.publish(topic, 21n),
+    { attempted: 1, admitted: 1, failed: 0, stale: 0 });
+  assert.equal(await host.drain(), null);
+  assert.deepEqual(deliveries, [21n]);
+  assert.equal(host.registry.unregister(k, registered.token), true);
+  assert.deepEqual(host.groups.members(topic), []);
+  assert.equal(host.groups.membership_count, 0);
+  assert.equal(host.pubsub.unsubscribe(topic, membership), false);
+  host.close();
+  assert.throws(() => host.pubsub.publish(topic, 3n), /E_ACTOR_GROUP_CLOSED/);
+});
