@@ -272,3 +272,98 @@ test('closing the host settles a pending drain and terminates workers exactly on
   host.close();
   assert.deepEqual(SilentWorker.instances.map(w => w.terminations), [1]);
 });
+
+class ControlledActorWorker {
+  static instances = [];
+  constructor() {
+    this.messages = [];
+    this.terminations = 0;
+    ControlledActorWorker.instances.push(this);
+  }
+  postMessage(data) { this.messages.push(data); }
+  emit(data) { this.onmessage?.({ data }); }
+  terminate() { this.terminations++; }
+}
+function controlledActorHost() {
+  const out = { text: '', truncated: false };
+  const host = createActorHost({
+    wasm: new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]),
+    names: ['Pending'], out, WorkerImpl: ControlledActorWorker, workerUrl: 'actor-worker.js'
+  });
+  host.spawn(0);
+  return { host, worker: ControlledActorWorker.instances.at(-1), out };
+}
+
+test('drain waits for actor initialization even without any mailbox messages', async () => {
+  const { host, worker, out } = controlledActorHost();
+  let settled = false;
+  const pending = host.drain().then(result => { settled = true; return result; });
+  await Promise.resolve();
+  assert.equal(settled, false, 'main returning before actor_init must not indicate success');
+  worker.emit({ kind: 'ready', stdout: 'initialized\n' });
+  assert.equal(await pending, null);
+  assert.equal(out.text, 'initialized\n');
+  host.close();
+});
+
+test('actor initialization faults are reported when no messages were sent', async () => {
+  const { host, worker } = controlledActorHost();
+  const pending = host.drain();
+  worker.emit({ kind: 'fault', message: 'E_PANIC: actor init failed' });
+  assert.equal(await pending, 'E_PANIC: actor init failed in actor Pending#0');
+  host.close();
+});
+
+test('duplicate readiness and completion before readiness are fail-closed', async () => {
+  const first = controlledActorHost();
+  const initial = first.host.drain();
+  first.worker.emit({ kind: 'ready' });
+  assert.equal(await initial, null);
+  first.worker.emit({ kind: 'ready' });
+  assert.match(await first.host.drain(), /E_ACTOR_PROTOCOL: duplicate or late actor readiness/);
+  first.host.close();
+
+  const second = controlledActorHost();
+  const pending = second.host.drain();
+  second.worker.emit({ kind: 'done', sequence: 0 });
+  assert.match(await pending, /E_ACTOR_PROTOCOL: unexpected actor completion/);
+  second.host.close();
+});
+
+test('closing a pending actor host settles drain and terminates once', async () => {
+  const { host, worker } = controlledActorHost();
+  const pending = host.drain();
+  host.close();
+  assert.equal(await pending, 'E_ACTOR: actor host closed');
+  host.close();
+  assert.equal(worker.terminations, 1);
+});
+
+class ThrowingInitWorker extends ControlledActorWorker {
+  postMessage() { throw new Error('DataCloneError: failed to queue init'); }
+}
+
+test('failed actor initialization handoff releases worker and preserves host count', async () => {
+  const out = { text: '', truncated: false };
+  const host = createActorHost({
+    wasm: new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]),
+    names: ['Pending'], out, WorkerImpl: ThrowingInitWorker, workerUrl: 'actor-worker.js'
+  });
+  const existing = ControlledActorWorker.instances.length;
+  assert.throws(() => host.spawn(0), /DataCloneError/);
+  assert.equal(host.count, 0, 'failed spawn must not reserve an actor reference');
+  assert.equal(ControlledActorWorker.instances.length, existing + 1);
+  assert.equal(ControlledActorWorker.instances.at(-1).terminations, 1, 'orphan worker must be terminated');
+  assert.equal(await host.drain(), null);
+  host.close();
+});
+
+test('overlapping drains fail closed instead of losing the original promise', async () => {
+  const { host, worker } = controlledActorHost();
+  const first = host.drain();
+  assert.throws(() => host.drain(), /E_ACTOR_PROTOCOL: concurrent drains/);
+  worker.emit({ kind: 'ready' });
+  assert.equal(await first, null, 'the original caller must still complete');
+  host.close();
+  assert.equal(await host.drain(), 'E_ACTOR: actor host closed');
+});

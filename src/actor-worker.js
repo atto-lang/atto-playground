@@ -36,7 +36,7 @@ async function handle(data) {
       instance = created;
       type = data.type;
       instance.exports.actor_init(type);
-      self.postMessage({ kind: 'ready' });
+      self.postMessage({ kind: 'ready', stdout: out.text, truncated: out.truncated });
     } else if (data?.kind === 'mail' && instance) {
       if (typeof data.value !== 'bigint' || data.value < I64_MIN || data.value > I64_MAX) {
         throw new Error('E_ACTOR_PROTOCOL: mail must be a signed 64-bit value');

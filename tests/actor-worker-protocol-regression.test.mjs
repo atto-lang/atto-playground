@@ -60,7 +60,7 @@ async function ready(session, type = 0) {
 test('real source-compiled actor admits consecutive 0-based mail exactly once', async () => {
   const w = await session();
   try {
-    assert.deepEqual(await ready(w), {kind:'ready'});
+    assert.deepEqual(await ready(w), {kind:'ready', stdout:'', truncated:false});
     w.send({kind:'mail',value:7n,sequence:0});
     assert.deepEqual(await w.wait(2), {kind:'done',sequence:0,stdout:'7\n',truncated:false});
     w.send({kind:'mail',value:3n,sequence:1});
