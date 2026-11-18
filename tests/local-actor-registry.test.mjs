@@ -524,3 +524,33 @@ test('retirement liveness probe throwing quarantines instead of permitting react
   assert.throws(() => registry.unregister(key('q'), registration.token), /E_ACTOR_REGISTRY_RETIRE_FAILED/);
   assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
 });
+
+
+test('reentrant liveness probe may not overwrite a successor incarnation', () => {
+  let registry, token, reenter = false, nextSlot = 0;
+  const alive = new Set();
+  registry = createLocalActorRegistry({
+    names: ['Queue'],
+    spawn() { const slot = nextSlot++; alive.add(slot); return slot; },
+    send() {},
+    isLive(slot) {
+      if (reenter && slot === 0) {
+        reenter = false;
+        assert.equal(registry.unregister(key('q'), token), true);
+        registry.register(key('q'));
+        return true; // The old liveness probe returns a deliberately stale result.
+      }
+      return alive.has(slot);
+    },
+    retire(slot) { alive.delete(slot); return true; }
+  });
+  const first = registry.register(key('q'));
+  token = first.token;
+  reenter = true;
+  assert.throws(() => registry.register(key('q')), /E_ACTOR_REGISTRY_REENTRANT/);
+  assert.equal(registry.size, 1);
+  const replacement = registry.lookup(key('q'));
+  assert.equal(replacement.incarnation, 2n);
+  assert.notEqual(replacement, first.ref);
+  assert.throws(() => registry.send(first.ref, 1n), /E_ACTOR_REF_STALE/);
+});
