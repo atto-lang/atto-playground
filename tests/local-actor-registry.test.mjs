@@ -391,3 +391,83 @@ test('worker creation failure releases Worker and does not consume an actor slot
   host.close();
   assert.equal(workers[1].dead, true);
 });
+
+test('lookup refuses a reference if its liveness callback closes registry', () => {
+  let registry, inspecting = false;
+  registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; }, send() {}, retire() {},
+    isLive() {
+      if (inspecting) registry.close();
+      return true;
+    }
+  });
+  registry.get_or_create(key('q'));
+  inspecting = true;
+  assert.throws(() => registry.lookup(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
+});
+
+test('existing registration is revalidated after a callback retires it', () => {
+  let registry, active = false, nextSlot = 0, token = null, oldRef = null;
+  const alive = new Set();
+  registry = createLocalActorRegistry({
+    names: ['Queue'],
+    spawn() { const slot = nextSlot++; alive.add(slot); return slot; },
+    send() {},
+    retire(slot) { alive.delete(slot); return true; },
+    isLive(slot) {
+      if (active && slot === 0) {
+        active = false;
+        assert.equal(registry.unregister(key('q'), token), true);
+        return true; // stale observation must be rejected.
+      }
+      return alive.has(slot);
+    }
+  });
+  const first = registry.register(key('q'));
+  token = first.token;
+  oldRef = first.ref;
+  active = true;
+  const newer = registry.get_or_create(key('q'));
+  assert.notEqual(newer, oldRef);
+  assert.equal(newer.incarnation, 2n);
+  assert.equal(registry.lookup(key('q')), newer);
+});
+
+test('send never admits mail after callback-driven retirement', () => {
+  let registry, retireDuringCheck = false, token;
+  const deliveries = [];
+  let alive = true;
+  registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send(_slot, payload) { deliveries.push(payload); },
+    retire() { alive = false; return true; },
+    isLive() {
+      if (retireDuringCheck) {
+        retireDuringCheck = false;
+        assert.equal(registry.unregister(key('q'), token), true);
+        return true; // deliberately stale callback observation
+      }
+      return alive;
+    }
+  });
+  const reg = registry.register(key('q'));
+  token = reg.token;
+  retireDuringCheck = true;
+  assert.throws(() => registry.send(reg.ref, 42n), /E_ACTOR_REF_STALE/);
+  assert.deepEqual(deliveries, []);
+});
+
+test('send rejects a reentrant close before host mailbox admission', () => {
+  let registry, closing = false;
+  const delivered = [];
+  registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send(_slot, value) { delivered.push(value); },
+    retire() {},
+    isLive() { if (closing) registry.close(); return true; }
+  });
+  const ref = registry.get_or_create(key('q'));
+  closing = true;
+  assert.throws(() => registry.send(ref, 1n), /E_ACTOR_REGISTRY_CLOSED/);
+  assert.deepEqual(delivered, []);
+});
