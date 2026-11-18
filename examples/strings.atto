@@ -1,0 +1,19 @@
+// Strings compare by content, join with +, order like Java String.compareTo,
+// and use the reference string members trim / starts_with / ends_with /
+// contains_literal.
+fnc greet(string who): string {
+  return "Hello, " + who.trim() + "!";
+}
+
+pub fnc main(): int {
+  val g = greet("  Atto  ");
+  stdio.println(g);
+  stdio.println(g.starts_with("Hello"));
+  stdio.println(g.contains_literal("Atto"));
+  stdio.println("apple" < "banana");
+  String lang = "AttoLang";
+  if lang eq "AttoLang" then
+    stdio.println("strings compare by content");
+  fi
+  return 0;
+}

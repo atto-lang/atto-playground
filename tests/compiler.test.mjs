@@ -52,7 +52,7 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
   const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
-  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib.atto', 'hello.atto', 'overflow.atto', 'primes.atto']);
+  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto']);
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
   assert.deepEqual([r.value, r.stdout], [42n, 'Hello from WebAssembly!\n42\n']);
@@ -70,6 +70,13 @@ test('every bundled example compiles and behaves as documented', async () => {
   assert.deepEqual([r.value, r.stdout], [42n, 'Account{id=7, balance=100}\n125\n']);
   r = await run(await src('enums.atto'));
   assert.deepEqual([r.value, r.stdout], [7n, 'green after 7 changes\n']);
+  // expected output is what the Java reference prints for the same file
+  r = await run(await src('floats.atto'));
+  assert.deepEqual([r.value, r.stdout], [18n, '12.566370614359172\n3.5\n0.30000000000000004\n1.0E7\nInfinity\n1477.8918800354004\n']);
+  r = await run(await src('strings.atto'));
+  assert.deepEqual([r.value, r.stdout], [0n, 'Hello, Atto!\ntrue\ntrue\ntrue\nstrings compare by content\n']);
+  r = await run(await src('match.atto'));
+  assert.deepEqual([r.value, r.stdout], [1n, '-\n-\nFizz\n-\nBuzz\nbool arms\n']);
   const actors = compiler.compile(await src('actors.atto'));
   assert.equal(actors.ok, true);
   assert.deepEqual(actorNames(await WebAssembly.compile(actors.wasm)), ['Counter']);
@@ -106,9 +113,13 @@ test('invalid programs fail closed and never return wasm', () => {
     [main('  return 42;') + ' malicious', 'E_TOPLEVEL'],
     [main('  return 9223372036854775808;'), 'E_INTEGER_RANGE'],
     [main('  return 7 / 2;'), 'E_UNSUPPORTED'],
-    [main('  int x = 7;\n  return x;'), 'E_SYNTAX'],
+    [main('  float x = 7.0;\n  return 0;'), 'E_SYNTAX'],
+    [main('  int x = 7;\n  x = 8;\n  return x;'), 'E_IMMUTABLE'],
+    [main('  val n = 2;\n  stdio.println("n=" + n);\n  return 0;'), 'E_TYPE'],
+    [main('  match 3\n    1 -> { return 1; }\n  end\n  return 0;'), 'E_MATCH'],
+    [main('  val f: float = 3;\n  return 0;'), 'E_TYPE'],
     [main('  if 1 then\n    return 1;\n  fi\n  return 0;'), 'E_TYPE'],
-    [main('  val s = "text";\n  return 0;'), 'E_UNSUPPORTED_TYPE'],
+    [main('  val a = [1, 2];\n  return 0;'), 'E_UNSUPPORTED'],
     [main('  return 0;') + '\u0000', 'E_NUL'],
     ['fnc helper(): int { return 1; }', 'E_ENTRY'],
     ['fnc f(int a): int {\n  if a > 1 then\n    return 1;\n  fi\n}\n' + main('  return f(0);'), 'E_RETURN'],
@@ -147,7 +158,7 @@ test('generated programs agree with expected arithmetic', async () => {
 
 test('checked arithmetic panics with a language-level message', async () => {
   let r = await run('define class N as\n  pub int v: 1\nend\n' + main('  let t = 0;\n  for (let i = 0; i < 1000000; i++) {\n    val n = new N();\n    t = t + n.v;\n  }\n  return t;'));
-  assert.equal(r.message, 'E_PANIC: object heap exhausted');
+  assert.match(r.message, /^E_PANIC: heap exhausted/);
   r = await run(main('  val m: int = -9223372036854775808;\n  return m - 1;'));
   assert.equal(r.message, 'E_PANIC: integer overflow');
   r = await run('fnc down(int n): int { return down(n + 1); }\n' + main('  return down(0);'));

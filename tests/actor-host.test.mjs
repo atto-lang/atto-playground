@@ -137,6 +137,142 @@ test('guest actor tables are validated', async () => {
   assert.throws(() => actorNames(new WebAssembly.Module(bytes)), /actor table missing/);
 });
 
+
+test('a fault in one actor does not abandon another worker\'s outstanding mail', async () => {
+  const workers = [];
+  class ScriptedWorker {
+    constructor() { this.ref = workers.length; this.live = true; workers.push(this); }
+    postMessage(message) {
+      if (message.kind === 'init') {
+        queueMicrotask(() => this.onmessage?.({ data: { kind: 'ready' } }));
+      } else if (this.ref === 0) {
+        queueMicrotask(() => this.onmessage?.({
+          data: { kind: 'fault', message: 'E_PANIC: synthetic failure', stdout: 'bad\n' }
+        }));
+      } else {
+        setTimeout(() => {
+          if (this.live) this.onmessage?.({
+            data: { kind: 'done', sequence: message.sequence, stdout: 'good\n' }
+          });
+        }, 10);
+      }
+    }
+    terminate() { this.live = false; }
+  }
+
+  const out = { text: '', truncated: false };
+  const host = createActorHost({
+    wasm: new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]),
+    names: ['Bad', 'Good'], out, WorkerImpl: ScriptedWorker, workerUrl: 'actor-worker.js'
+  });
+  const bad = host.spawn(0), good = host.spawn(1);
+  host.send(bad, 7n);
+  host.send(good, 1n);
+  host.send(good, 2n);
+  const fault = await host.drain();
+  assert.equal(fault, 'E_PANIC: synthetic failure in actor Bad#0');
+  assert.equal(out.text, 'bad\ngood\ngood\n', 'sibling finishes after the first fault');
+  assert.throws(() => host.send(bad, 8n), /E_ACTOR_DEAD/);
+  assert.equal(workers[0].live, false, 'failed worker was reclaimed');
+  host.close();
+  assert.equal(workers.every(w => !w.live), true);
+});
+
+test('drain waits for asynchronous actor initialization even without mail', async () => {
+  class InitFailureWorker {
+    postMessage() {
+      setTimeout(() => this.onmessage?.({
+        data: { kind: 'fault', message: 'E_ACTOR: startup failed' }
+      }), 5);
+    }
+    terminate() {}
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]),
+    names: ['Broken'], out: { text: '', truncated: false },
+    WorkerImpl: InitFailureWorker, workerUrl: 'actor-worker.js'
+  });
+  host.spawn(0);
+  const fault = await host.drain();
+  assert.equal(fault, 'E_ACTOR: startup failed in actor Broken#0');
+  host.close();
+});
+
+test('real guest Wasm panic terminates only its actor while a sibling finishes', async () => {
+  const r = await runActors(`define actor W as
+  receive(ActorMail<int> mail): void {
+    stdio.println(mail.value);
+    stdio.println(mail.value * 9223372036854775807);
+    return;
+  }
+end
+pub fnc main(): int {
+  val bad = spawn W();
+  val good = spawn W();
+  bad.send(7);
+  good.send(0);
+  good.send(0);
+  return 0;
+}`);
+  assert.equal(r.fault, 'E_PANIC: integer overflow in actor W#0');
+  assert.equal(r.stdout.split('\n').filter(Boolean).length, 5,
+    'one bad print and four healthy sibling prints must survive');
+  assert.equal(r.stdout.split('\n').filter(Boolean).filter(x => x === '0').length, 4);
+  assert.equal(FakeWorker.live, 0);
+});
+
+
+test('mailbox admission freezes during drain and a concurrent drain is rejected', async () => {
+  class ScriptedWorker {
+    postMessage(message) {
+      if (message.kind === 'init') {
+        queueMicrotask(() => this.onmessage?.({ data: { kind: 'ready' } }));
+      } else {
+        queueMicrotask(() => this.onmessage?.({
+          data: { kind: 'done', sequence: message.sequence }
+        }));
+      }
+    }
+    terminate() {}
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['W'], out: { text: '', truncated: false },
+    WorkerImpl: ScriptedWorker, workerUrl: 'actor-worker.js'
+  });
+  const a = host.spawn(0);
+  host.send(a, 1n);
+  const draining = host.drain();
+  assert.throws(() => host.drain(), /E_ACTOR_PROTOCOL: concurrent drains/);
+  assert.throws(() => host.spawn(0), /spawn admission closed/);
+  assert.throws(() => host.send(a, 2n), /mailbox admission closed/);
+  assert.equal(await draining, null);
+  assert.equal(await host.drain(), null, 'subsequent drain is idempotent');
+  host.close();
+});
+
+test('closing the host settles a pending drain and terminates workers exactly once', async () => {
+  class SilentWorker {
+    static instances = [];
+    constructor() { this.terminations = 0; SilentWorker.instances.push(this); }
+    postMessage() {} // no ready/done acknowledgement
+    terminate() { this.terminations++; }
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['W'], out: { text: '', truncated: false },
+    WorkerImpl: SilentWorker, workerUrl: 'actor-worker.js'
+  });
+  const a = host.spawn(0);
+  host.send(a, 1n);
+  const pending = host.drain();
+  host.close();
+  assert.equal(await pending, 'E_ACTOR: actor host closed');
+  assert.equal(await host.drain(), 'E_ACTOR: actor host closed');
+  host.close();
+  assert.deepEqual(SilentWorker.instances.map(w => w.terminations), [1]);
+});
+
 class ControlledActorWorker {
   static instances = [];
   constructor() {
@@ -225,7 +361,7 @@ test('failed actor initialization handoff releases worker and preserves host cou
 test('overlapping drains fail closed instead of losing the original promise', async () => {
   const { host, worker } = controlledActorHost();
   const first = host.drain();
-  assert.throws(() => host.drain(), /E_ACTOR: drain already pending/);
+  assert.throws(() => host.drain(), /E_ACTOR_PROTOCOL: concurrent drains/);
   worker.emit({ kind: 'ready' });
   assert.equal(await first, null, 'the original caller must still complete');
   host.close();

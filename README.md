@@ -2,7 +2,7 @@
 
 A self-hosted, static **Atto source → WebAssembly compiler → WebAssembly guest** demo. Both compiler and generated program execute inside the visitor's browser. No compilation server and no user-code uploads.
 
-The compiler is [atto-lang/atto-source.rs](https://github.com/atto-lang/atto-source.rs), a Rust AttoLang compiler built for `wasm32-unknown-unknown`. It emits real binary Wasm, not a JavaScript simulation. It compiles a subset of AttoLang: functions, checked `int`/`bool`, bindings, loops, classes, basic enums and bounded actors using dedicated Web Workers. Its syntax follows the reference compiler, and everything outside the subset is rejected. See [the contract](docs/COMPILER_CONTRACT.md).
+The compiler is [atto-lang/atto-source.rs](https://github.com/atto-lang/atto-source.rs), a Rust AttoLang compiler built for `wasm32-unknown-unknown`. It emits real binary Wasm, not a JavaScript simulation. It compiles a subset of AttoLang: functions, recursion, `int`/`bool`, bindings, `if`/`while`/`for`/`loop` and `stdio.println`. Its syntax follows the reference compiler, and everything outside the subset is rejected. See [the contract](docs/COMPILER_CONTRACT.md).
 
 ## Verify locally
 
@@ -11,7 +11,7 @@ Requires Node 20 or later. Python 3 is optional, for the HTTP server. There are 
 ```sh
 npm run verify          # receipt digest, compiler ABI, examples, guests, worker tests
 npm run serve           # http://localhost:8080
-CHROME_BIN=... npm run test:e2e   # 31 real-browser scenarios under /play/
+CHROME_BIN=... npm run test:e2e   # 17 real-browser scenarios under /play/
 ```
 
 To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-source.rs`. It rebuilds the wasm and rewrites `public/atto_compiler.receipt.json` with the source head, tree, toolchain and sha256. CI fails if the shipped wasm does not match the receipt.
@@ -20,10 +20,12 @@ To update the compiler, run `npm run vendor:compiler -- /path/to/clean/atto-sour
 
 - `public/atto_compiler.wasm` and `public/atto_compiler.receipt.json`: the vendored compiler and its provenance.
 - `src/compiler.js`: compiler ABI v2 bridge.
-- `src/compiler-worker.js`: disposable compilation worker with a 10-second deadline.
-- `src/runner-worker.js` and `src/guest.js`: a disposable guest worker. It grants only `atto.print_*`, caps stdout and maps panics to messages.
-- `examples/*.atto`: compiler exercises for the supported subset; language-reference parity depends on the construct (notably, simple enums currently use the LLVM v1 spelling).
+- `src/compiler-worker.js`: disposable compilation worker with a 3-second deadline.
+- `src/runner-worker.js`, `src/tenant-actor-host.js`, and `src/guest.js`: a disposable tenant guest worker. One compiled module is instantiated per actor, with independent memories/globals, a round-robin mailbox scheduler, bounded stdout, and actor-local trap handling.
+- `examples/*.atto`: the example programs. Each one is checked against the Java reference compiler.
 - `src/app.js` and `index.html`: the static UI, examples, Wasm download and share links.
+
+The current guest ABI is synchronous: `actor_receive` cannot suspend, and a runaway Wasm call cannot be preempted within one tenant Worker. The parent 3-second deadline still terminates the whole tenant; compiler-lowered continuations and instruction budgets are required before declaring arbitrary untrusted actors independently CPU-isolated. A scalar-only actor compiled by the currently pinned compiler may have no linear memory export; the new compiler emits a bounded 64 KiB actor memory (see atto-source.rs PR #61) and must be vendored through the existing provenance gate before this property is guaranteed for all playground actors.
 
 ## Deployment
 
@@ -32,7 +34,7 @@ Host this directory on any static host, with `.wasm` served as `application/wasm
 
 The full browser E2E suite checks a compiled 42 result, downloaded Wasm execution, stale-artifact invalidation on edits, mutable and immutable examples, syntax diagnostics, runtime traps, source limits, recovery, Unicode share-link reload, stop/restart cancellation, HTML-injection rejection and static-only HTTP traffic. It uses a disposable Chrome profile, an ephemeral DevTools port and a local static server. It is separate from the Node compiler test suite.
 
-Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The current Rust compiler supports only the documented browser subset; passing playground tests does not establish full AttoLang semantics or five-backend conformance.
+Passing Chromium E2E tests does **not** establish Firefox or WebKit coverage, a publicly deployed HTTPS route, or full AttoLang compiler compatibility. The current C bootstrap accepts only the documented M0 scalar subset; promotion to canonical Atto frontend and typed IR requires compiler-backed parity evidence and independent review.
 
 
 ## Browser editor UI
@@ -48,3 +50,19 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+## Portable saved-program backups
+
+The browser's **Export JSON** and **Import JSON** controls use an explicitly versioned offline backup format (30 named programs maximum; 64 KiB source per program; 512 KiB backup cap). Import validates all entries before a single localStorage write. Name conflicts require explicit overwrite approval; otherwise no entries are changed. Saves and imports fail closed on corrupted existing localStorage rather than silently erasing it. Switching away from modified custom code prompts before discarding edits; browser tab-close dialogs are intentionally not enabled because their behavior is inconsistent across browsers. Export a backup before clearing browser data. These features do not upload user code.
+
+## Repository ownership and contribution routing
+
+**Belongs here:** Static IDE/playground UI, browser compiler packaging, pinned Wasm compiler receipts, example programs and browser/Node smoke tests.
+
+**Belongs elsewhere:** The Rust-to-Wasm compiler source belongs in atto-source.rs; language-site marketing in atto-lang.github.io; JS-transpiler core in atto-source.js.
+
+**Security and portability boundary:** Compilation and guest execution must be local to the visitor for advertised offline/static paths. Pin binary SHA, imports and headers; cap fuel/output/memory, isolate disposable workers, and gate deployment on exact-tree executed browser tests.
+
+AttoLang is the public name; preserve existing Oreslang/.ores compatibility and use canonical .atto for new portable library source. This README defines scope, not feature readiness.
+
+**Acceptance:** name exact source SHA/tree, runtime/toolchain, positive and negative checks and execution receipt before claiming support. Host-only tests and empty CI steps do not prove guest execution.
