@@ -1,0 +1,37 @@
+{
+  "schema": "shared-auth.quint-itf-state-projection.v1",
+  "note": "Lossless Boolean-state projection of 4 actual Quint 0.32.0 ITF traces. Raw JSON + SHA digests remain in producer GitHub Actions artifact. Projection does not contain mbt metadata and is not itself an ITF trace.",
+  "producer": {
+    "repository": "shared-auth/shared-auth-formal",
+    "source_head": "4b54df546d6f2385c6de081a7b3892c19a1fc99e",
+    "quint_model_sha256": "cb41b05c0a2b90489d56e270ecf197839546aa59315cdbcc7acb91b5dc03c869",
+    "workflow_run_id": 42394560514,
+    "artifact_id": 13582817373,
+    "artifact_zip_sha256": "2395238077710fef3584e0fdd7417a10afb457ed5a199a8e3d6df2159785d64d",
+    "toolchain": "Quint 0.32.0 (typescript simulator)",
+    "status": "EXECUTED_QUINT_SIMULATION"
+  },
+  "bits": "each character is an integer 0..7 encoding realm_a=bit2, realm_b=bit1, accepted=bit0",
+  "traces": [
+    {
+      "itf": "trace_0.itf.json",
+      "raw_itf_sha256": "0688f061ed190fb616cbca201c3f97018af70a0f43178fdb3a2d157228eda1a7",
+      "states": "046666667777776666666"
+    },
+    {
+      "itf": "trace_1.itf.json",
+      "raw_itf_sha256": "15b386b77a1f5e0809b882fcc59632ce4a484508528bea080fe0085a49bfdf1d",
+      "states": "044444444446666677777"
+    },
+    {
+      "itf": "trace_2.itf.json",
+      "raw_itf_sha256": "2f550a98f6977c5b43a1de1e32534d8d6e3342cd39b21aed0ee700ffdd54df3b",
+      "states": "044444446767666776666"
+    },
+    {
+      "itf": "trace_3.itf.json",
+      "raw_itf_sha256": "e80cc53565f9c92ad9ee8a0e4e8f7bb66eb1969db149fe9949305079e2063a80",
+      "states": "044444444444444444446"
+    }
+  ]
+}
