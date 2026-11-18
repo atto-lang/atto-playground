@@ -237,12 +237,12 @@ test('shutdown during spawn cancels publication and retires the provisional acto
 });
 
 test('shutdown during a liveness callback cannot publish the activation', () => {
-  let registry, retired = 0;
+  let registry, retired = 0, live = true;
   registry = createLocalActorRegistry({
     names: ['Queue'], spawn() { return 0; },
     send() {},
-    isLive() { registry.close(); return true; },
-    retire() { retired++; return true; }
+    isLive() { if (live) registry.close(); return live; },
+    retire() { retired++; live = false; return true; }
   });
   assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
   assert.equal(retired, 1);
@@ -251,14 +251,15 @@ test('shutdown during a liveness callback cannot publish the activation', () => 
 
 test('liveness exceptions roll back allocation and permit a fresh attempt', () => {
   let slot = 0, retired = 0, throwOnce = true;
+  const dead = new Set();
   const registry = createLocalActorRegistry({
     names: ['Queue'], spawn() { return slot++; },
     send() {},
-    isLive() {
+    isLive(id) {
       if (throwOnce) { throwOnce = false; throw new Error('synthetic liveness error'); }
-      return true;
+      return !dead.has(id);
     },
-    retire() { retired++; return true; }
+    retire(id) { retired++; dead.add(id); return true; }
   });
   assert.throws(() => registry.get_or_create(key('q')), /synthetic liveness/);
   assert.equal(retired, 1);
@@ -307,9 +308,10 @@ test('physical slot reuse for another key fails closed without retiring its owne
 });
 
 test('slot reuse is prohibited even after retirement within the same registry epoch', () => {
+  let live = true;
   const registry = createLocalActorRegistry({
     names: ['Queue'], spawn() { return 0; },
-    send() {}, isLive() { return true; }, retire() { return true; }
+    send() {}, isLive() { return live; }, retire() { live = false; return true; }
   });
   const first = registry.register(key('q'));
   assert.equal(registry.unregister(key('q'), first.token), true);
@@ -470,4 +472,55 @@ test('send rejects a reentrant close before host mailbox admission', () => {
   closing = true;
   assert.throws(() => registry.send(ref, 1n), /E_ACTOR_REGISTRY_CLOSED/);
   assert.deepEqual(delivered, []);
+});
+
+test('retirement that returns false but leaves actor alive quarantines registry', () => {
+  const registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send() {}, isLive() { return true; },
+    retire() { return false; } // malicious/buggy host callback
+  });
+  const registration = registry.register(key('q'));
+  assert.throws(() => registry.unregister(key('q'), registration.token), /E_ACTOR_REGISTRY_RETIRE_FAILED/);
+  assert.equal(registry.size, 0);
+  assert.throws(() => registry.register(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
+});
+
+test('rollback that leaves a provisional actor alive quarantines registry', () => {
+  let registry;
+  registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { registry.close(); return 0; },
+    send() {}, isLive() { return true; },
+    retire() { return true; } // claims success but remains live
+  });
+  assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_ROLLBACK/);
+  assert.throws(() => registry.get_or_create(key('other')), /E_ACTOR_REGISTRY_CLOSED/);
+});
+
+test('already-dead actor can be removed even if retirement returns false', () => {
+  let live = true;
+  const registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send() {}, isLive() { return live; },
+    retire() { return false; }
+  });
+  const registration = registry.register(key('q'));
+  live = false;
+  assert.equal(registry.unregister(key('q'), registration.token), true);
+  assert.equal(registry.size, 0);
+  assert.equal(registry.lookup(key('q')), null);
+});
+
+test('retirement liveness probe throwing quarantines instead of permitting reactivation', () => {
+  let count = 0;
+  const registry = createLocalActorRegistry({
+    names: ['Queue'], spawn() { return 0; },
+    send() {}, isLive() {
+      if (++count > 1) throw new Error('liveness indeterminate');
+      return true;
+    }, retire() { return true; }
+  });
+  const registration = registry.register(key('q'));
+  assert.throws(() => registry.unregister(key('q'), registration.token), /E_ACTOR_REGISTRY_RETIRE_FAILED/);
+  assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
 });
