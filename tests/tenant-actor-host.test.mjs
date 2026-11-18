@@ -176,6 +176,7 @@ test('actor trap drops its remaining queued mail without dropping healthy siblin
   host.send(good, 2n);
   assert.equal(host.stats.pendingMessages, 5);
   assert.match(await host.drain(), /in actor Counter#0/);
+  assert.equal(host.memoryBytes, 65536, 'faulted actor heap is released while healthy sibling stays live');
   assert.equal(out.text, '12', 'healthy actor receives each queued message in order');
   assert.deepEqual(host.stats, {
     pendingMessages: 0, droppedMessages: 2, maxPendingMessages: 20_000
