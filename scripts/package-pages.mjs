@@ -15,6 +15,9 @@ export const PAGES_ASSETS = Object.freeze([
   'src/runner-worker.js',
   'src/actor-host.js',
   'src/actor-worker.js',
+  'src/actor-abi-version.js',
+  'src/tenant-actor-host.js',
+  'src/wasm-memory-admission.js',
   'src/guest.js',
   'src/worker-task.js',
   'src/editor.js',
@@ -37,9 +40,12 @@ export const PAGES_ASSETS = Object.freeze([
   'examples/enums.atto',
   'examples/error.atto',
   'examples/fib.atto',
+  'examples/floats.atto',
   'examples/hello.atto',
+  'examples/match.atto',
   'examples/overflow.atto',
   'examples/primes.atto',
+  'examples/strings.atto',
 ]);
 
 async function checkedFile(root, name) {

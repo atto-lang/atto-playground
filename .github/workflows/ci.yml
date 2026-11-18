@@ -25,6 +25,22 @@ jobs:
           git rev-parse HEAD^{tree}
       - name: Validate compiler receipt, ABI and real guest execution
         run: npm run verify
+      - name: Retain exact-head compiled Atto dual-realm proof receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atto-dual-realm-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: target/formal/dual-realm-wasm-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Retain executed Quint-derived Atto replay receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: atto-quint-replay-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_attempt }}
+          path: target/formal/dual-realm-quint-replay-receipt.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Browser smoke and full Chromium E2E
         run: |
           export CHROME_BIN="$(command -v google-chrome || command -v chromium)"
