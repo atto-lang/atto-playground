@@ -177,9 +177,17 @@ export function createTenantActorHost({ module, names, out }) {
     }
   }
 
+  function getOrCreate(type, namespace, applicationKey) {
+    const ref = registry.get_or_create({
+      namespace, actor_type: type, application_key: applicationKey
+    });
+    // Exact physical incarnation, not a virtual ref, for existing i32 ABI.
+    return registry.slot_for(ref);
+  }
+
   const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
   return {
-    spawn, send, drain, close, isLive, retire, registry,
+    spawn, send, getOrCreate, drain, close, isLive, retire, registry,
     get count() { return actors.length; },
     get memoryBytes() {
       return actors.reduce((sum, a) => sum + (a.instance?.exports.memory?.buffer.byteLength ?? 0), 0);
