@@ -6,6 +6,7 @@
  * numbers from 0. The host lives inside the runner worker: terminating the
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
+import { createLocalActorRegistry } from './local-actor-registry.js';
 import { appendCapped } from './guest.js';
 
 export const MAX_ACTORS = 16;
@@ -92,6 +93,20 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     a.sent++;
   }
 
+  function isLive(ref) {
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    return !closed && !!actor && !actor.failed && !actor.terminated;
+  }
+
+  function retire(ref) {
+    if (!isLive(ref)) return false;
+    const actor = actors[ref];
+    actor.failed = true; // terminal without creating a global run fault
+    terminate(actor);
+    check();
+    return true;
+  }
+
   /** Resolve after all healthy actors drain and every actor has finished
    *  startup (or failed). Preserve the first fault while siblings continue.
    *  Mail comes only from main, so after main returns it is final. */
@@ -108,10 +123,13 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function close() {
     if (closed) return;
     closed = true;
+    registry.close();
     for (const a of actors) terminate(a);
     // Explicit shutdown must settle an outstanding drain, never hang callers.
     check();
   }
 
-  return { spawn, send, drain, close, get count() { return actors.length; } };
+  const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
+  return { spawn, send, drain, close, isLive, retire, registry,
+    get count() { return actors.length; } };
 }
