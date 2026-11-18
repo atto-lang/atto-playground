@@ -117,8 +117,11 @@ export function describePanic(instance, error) {
   const code = instance.exports.panic_code?.value ?? 0;
   if (code === 1) return 'E_PANIC: integer overflow';
   if (code === 2) return 'E_PANIC: division by zero';
-  if (code === 4) return 'E_PANIC: explicit terminal trap';
   if (code === 3) return 'E_PANIC: heap exhausted (objects and joined strings share a fixed 1 MiB heap)';
+  if (code === 4) return 'E_PANIC: invalid generator handle or state';
+  if (code === 5) return 'E_PANIC: generator step budget exhausted (a pull ran too long without yielding)';
+  // Compiler-enforced logical stack quota (spec ch. 25): same depth in every engine.
+  if (code === 6) return 'E_PANIC: stack overflow (more than 1024 nested recursive calls)';
   if (error instanceof RangeError) return 'E_PANIC: stack exhausted (recursion too deep)';
   // host capability errors (actor limits) already carry their own code
   if (typeof error?.message === 'string' && /^E_[A-Z_]+: /.test(error.message)) return error.message;
