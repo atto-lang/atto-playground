@@ -71,7 +71,7 @@ This is version negotiation and safety hardening, **not** an implementation of r
 
 - The runner worker acts as one disposable tenant Worker per execution. Every `spawn` creates a separate `WebAssembly.Instance` from the same compiled `WebAssembly.Module`. Actors have private globals and, when declared by the compiled module, separate private linear memories; no per-actor Worker is created.
 - `send` queues mail with sequence numbers from 0. The tenant runtime drains one message per actor per round-robin pass, preserving each actor's FIFO order and preventing one busy mailbox from starving other completed handlers.
-- Limits: 16 actors per run and 10,000 messages per actor (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`). Actors cannot spawn or send.
+- Limits: 16 actors per run, 10,000 messages admitted per actor, and 20,000 **pending messages across the entire tenant** (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`, `E_ACTOR_TOTAL_MAILBOX`). The global quota is reserved on enqueue and released upon delivery, trap-drop, or tenant close. Actors cannot spawn or send.
 - The run ends when `main` has returned and every mailbox has drained, which matches the Java reference. Output from different actors may interleave in any order.
 - A trapping actor is marked failed; the tenant continues draining healthy sibling actors, then reports the first fault as `E_RUNTIME` or `E_PANIC` with the actor identity. A non-returning guest call still blocks the tenant Worker until the outer deadline kills it.
 - Stop and the 3-second deadline terminate the runner worker, invalidating every actor instance and mailbox in that tenant.
