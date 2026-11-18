@@ -99,6 +99,7 @@ test('Wasm trap kills only its actor; healthy siblings finish', async () => {
   const fault = await host.drain();
   assert.match(fault, /E_RUNTIME: .* in actor Counter#0/);
   assert.equal(out.text, '112'); // healthy actor processed both messages
+  assert.equal(host.memoryBytes, 65536, 'failed actor releases its Wasm memory while sibling remains');
   host.close();
 });
 
@@ -167,4 +168,36 @@ test('tenant Wasm actor host uses keyed refs and rejects stale incarnations', as
   assert.equal(host.memoryBytes, 65536, 'retired actor memory was released');
   host.close();
   assert.equal(host.memoryBytes, 0);
+});
+
+test('keyed tenant host refuses registration after drain without leaking a guest', async () => {
+  const host = createTenantActorHost({
+    module: new WebAssembly.Module(actorFixture()), names: ['Counter'],
+    out: { text: '', truncated: false }
+  });
+  const key = { namespace: 'tenant-x', actor_type: 0, application_key: 'q' };
+  assert.equal(await host.drain(), null);
+  assert.throws(() => host.registry.get_or_create(key), /spawn admission closed/);
+  assert.equal(host.registry.lookup(key), null);
+  assert.equal(host.registry.size, 0);
+  assert.equal(host.memoryBytes, 0);
+  host.close();
+});
+
+test('keyed failed tenant guest releases memory and can be replaced at new incarnation', async () => {
+  const host = createTenantActorHost({
+    module: new WebAssembly.Module(actorFixture()), names: ['Counter'],
+    out: { text: '', truncated: false }
+  });
+  const key = { namespace: 'tenant-x', actor_type: 0, application_key: 'q' };
+  const first = host.registry.get_or_create(key);
+  host.registry.send(first, 7n); // guest traps, quarantines only its own instance
+  const fault = await host.drain();
+  assert.match(fault, /E_RUNTIME: .* in actor Counter#0/);
+  assert.equal(host.memoryBytes, 0, 'failed Wasm allocation was reclaimed');
+  assert.equal(host.registry.lookup(key), null);
+  // Drain closes admission permanently in the v2 tenant host. No silent restart.
+  assert.throws(() => host.registry.get_or_create(key), /spawn admission closed/);
+  assert.throws(() => host.registry.send(first, 2n), /E_ACTOR_REF_STALE/);
+  host.close();
 });
