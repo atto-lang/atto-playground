@@ -121,6 +121,12 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     const existing = entries.get(id);
     const live = active(existing);
     checkedOpen();
+    // A host liveness probe may reenter and publish a new incarnation.
+    // Never overwrite that successor after returning from the callback.
+    const observed = entries.get(id);
+    if (observed && observed !== existing) {
+      throw new Error('E_ACTOR_REGISTRY_REENTRANT: key replaced during liveness check');
+    }
     if (live && entries.get(id) === existing) {
       return Object.freeze({ ref: existing.ref, token: null, created: false });
     }
