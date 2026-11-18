@@ -16,6 +16,7 @@ export function admitWasm32Memory(bytes, { maxPages = MAX_GUEST_MEMORY_PAGES } =
     throw new RangeError('E_ACTOR_MEMORY: invalid memory page quota');
   }
   let pos = 8, memorySeen = false, declaredMemories = 0;
+  let minimumPages = 0, maximumPages = 0;
   const u32 = (end) => {
     let value = 0;
     for (let i = 0; i < 5; i++) {
@@ -24,9 +25,21 @@ export function admitWasm32Memory(bytes, { maxPages = MAX_GUEST_MEMORY_PAGES } =
       const payload = byte & 0x7f;
       if (i === 4 && payload > 15) throw new Error('E_ACTOR_MEMORY: LEB32 overflow');
       value += payload * 2 ** (i * 7);
-      if (!(byte & 0x80)) return value;
+      if (!(byte & 0x80)) {
+        if (i && payload === 0) throw new Error('E_ACTOR_MEMORY: noncanonical LEB32');
+        return value;
+      }
     }
     throw new Error('E_ACTOR_MEMORY: malformed LEB32');
+  };
+  // The Oreslang browser preflight rejects start functions. A start function
+  // would execute during instantiation, before the host binds guest memory.
+  // Do not ban Wasm tables here: Atto class dispatch may legitimately use them.
+  let importsSeen = false;
+  const skipName = end => {
+    const length = u32(end);
+    if (length > end - pos) throw new Error('E_ACTOR_MEMORY: malformed Wasm import bounds');
+    pos += length;
   };
   while (pos < bytes.length) {
     const id = bytes[pos++];
@@ -34,6 +47,25 @@ export function admitWasm32Memory(bytes, { maxPages = MAX_GUEST_MEMORY_PAGES } =
     const end = pos + length;
     if (!Number.isSafeInteger(end) || end > bytes.length) {
       throw new Error('E_ACTOR_MEMORY: malformed Wasm section bounds');
+    }
+    if (id === 8) throw new Error('E_GUEST_ABI: Wasm start functions not admitted');
+    // A memory import has no section 5 declaration. Reject it early, before
+    // allocating any actor or guest instance, rather than reporting 0 pages.
+    if (id === 2) {
+      if (importsSeen) throw new Error('E_ACTOR_MEMORY: duplicate import section');
+      importsSeen = true;
+      const count = u32(end);
+      if (count > 128) throw new Error('E_ACTOR_MEMORY: too many imports');
+      for (let i = 0; i < count; i++) {
+        skipName(end);
+        skipName(end);
+        if (pos >= end) throw new Error('E_ACTOR_MEMORY: truncated Wasm import');
+        const kind = bytes[pos++];
+        if (kind === 2) throw new Error('E_ACTOR_MEMORY: imported memory not admitted');
+        if (kind !== 0) throw new Error('E_ACTOR_MEMORY: non-function import not admitted');
+        u32(end);
+      }
+      if (pos !== end) throw new Error('E_ACTOR_MEMORY: invalid import section tail');
     }
     if (id === 5) {
       if (memorySeen) throw new Error('E_ACTOR_MEMORY: duplicate memory section');
@@ -53,10 +85,14 @@ export function admitWasm32Memory(bytes, { maxPages = MAX_GUEST_MEMORY_PAGES } =
         if (minimum > maximum || maximum > maxPages) {
           throw new Error(`E_ACTOR_MEMORY: declared memory exceeds ${maxPages} pages`);
         }
+        minimumPages = minimum;
+        maximumPages = maximum;
       }
       if (pos !== end) throw new Error('E_ACTOR_MEMORY: invalid memory section tail');
     }
     pos = end;
   }
-  return { memoryCount: declaredMemories, maxPages };
+  // Declared bounds describe the guest, not actual allocated heap bytes.
+  // Imported memories are rejected by the same preflight above.
+  return { memoryCount: declaredMemories, maxPages, minimumPages, maximumPages };
 }

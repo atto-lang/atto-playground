@@ -49,19 +49,32 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   }
   function onMessage(a, data) {
     if (closed || a.failed) return;
-    if (typeof data?.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
-    if (data?.truncated) out.truncated = true;
     if (data?.kind === 'fault') {
+      if (typeof data.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
+      if (data.truncated) out.truncated = true;
       fail(a, typeof data.message === 'string' && /^E_[A-Z_]+: /.test(data.message) ? data.message : 'E_ACTOR: worker fault');
-    } else if (data?.kind === 'ready' && !a.ready) {
+      return;
+    }
+    if (data?.kind === 'ready') {
+      if (a.ready || a.done !== 0) {
+        fail(a, 'E_ACTOR_PROTOCOL: duplicate or late actor readiness');
+        return;
+      }
       a.ready = true;
-      check();
-    } else if (data?.kind === 'done' && a.ready && data.sequence === a.done && a.done < a.sent) {
+    } else if (data?.kind === 'done') {
+      if (!a.ready || data.sequence !== a.done || a.done >= a.sent) {
+        fail(a, 'E_ACTOR_PROTOCOL: unexpected actor completion');
+        return;
+      }
       a.done++;
-      check();
     } else {
       fail(a, 'E_ACTOR_PROTOCOL: unexpected actor worker message');
+      return;
     }
+    // Never accept output from an invalid/spoofed protocol response.
+    if (typeof data.stdout === 'string' && data.stdout) appendCapped(out, data.stdout);
+    if (data.truncated) out.truncated = true;
+    check();
   }
 
   function spawn(type) {
@@ -76,11 +89,10 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
       a.worker.onmessage = event => onMessage(a, event.data);
       a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
       a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
-      // Each actor gets a private copy of the module bytes.
+      // Every actor gets a private copy of its admitted Wasm bytes.
       a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type });
     } catch (error) {
-      // Failed initialization admission cannot leave an orphaned Worker.
-      // Do not consume an actor slot if the constructor or postMessage fails.
+      // A failed constructor, callback registration or structured clone must not consume a slot.
       if (a.worker) terminate(a);
       throw error;
     }

@@ -1,0 +1,5 @@
+# Protect compiler Wasm, formatter, browser-source, receipts and CI policy.
+# An approval from EITHER named owner is sufficient when required by ruleset.
+# GitHub does not count an author's own approval.
+# Administrators must protect main and require Code Owner reviews; this file alone does not enforce merges.
+* @ORESoftware @the1mills
