@@ -56,6 +56,9 @@ export function createTenantActorHost({ module, names, out }) {
     a.mailbox.length = 0;
     a.head = 0;
     flush(a);
+    // The failed actor cannot receive again: drop its guest heap immediately,
+    // without waiting for healthy siblings or the tenant-wide final close.
+    a.instance = null;
   }
   function checkMemory(a) {
     const memory = a.instance?.exports.memory;
