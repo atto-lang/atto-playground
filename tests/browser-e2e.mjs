@@ -110,6 +110,21 @@ try {
   await cdp('Page.setDownloadBehavior',{behavior:'allow',downloadPath:downloads});
   await navigate(base);
   ok('static site resolves under /play/');
+  const beforeResize = await view();
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '53');
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('role')"), 'separator');
+  await js("(()=>{const s=document.querySelector('#splitter');s.focus();s.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));})()");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '58');
+  await js("document.querySelector('#splitter').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}))");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '75');
+  await js("document.querySelector('#splitter').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true}))");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '25');
+  await js("document.querySelector('#splitter').dispatchEvent(new KeyboardEvent('keydown',{key:'0',bubbles:true,cancelable:true}))");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '53');
+  assert.equal((await view()).source, beforeResize.source, 'resizing must not mutate program text');
+  assert.equal((await view()).kind, beforeResize.kind, 'resizing must not run code');
+  ok('keyboard-accessible splitter resizes, clamps, resets and preserves source');
+
 
   const unformatted='fnc main() -> int {\nreturn 42;\n}\n';
   await source(unformatted);
@@ -143,6 +158,23 @@ try {
   assert.equal(await js("document.querySelector('#syntax-layer .tok-keyword')?.textContent"),'fnc');
   assert.equal(await js("document.querySelector('#syntax-layer').textContent"),customSource);
   ok('custom + saves a named program in browser localStorage with syntax coloring');
+  await click('export-custom');
+  const exportedJson = await poll(async () => {
+    const files = (await readdir(downloads)).filter(n => n === 'atto-programs-backup.json');
+    if (!files.length) return null;
+    try { return JSON.parse(await readFile(join(downloads,files[0]),'utf8')); }
+    catch { return null; }
+  },'downloaded JSON program backup');
+  assert.equal(exportedJson.format,'atto.playground.programs.v1');
+  assert.equal(exportedJson.programs[0].source,customSource);
+  ok('Export JSON downloads an actual local-only program backup');
+  const importBody = JSON.stringify({format:'atto.playground.programs.v1',
+    programs:[{name:'Imported 7',source:'fnc main() -> int { return 7; }',updatedAt:5}]});
+  await js("(()=>{const f=new File(["+JSON.stringify(importBody)+"],'programs.json',{type:'application/json'});const d=new DataTransfer();d.items.add(f);const e=document.querySelector('#import-file');e.files=d.files;e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  const imported = await poll(async()=>js("JSON.parse(localStorage.getItem('atto.playground.saved-programs.v1')).some(p=>p.name==='Imported 7'&&p.source.includes('return 7'))"),'imported JSON program');
+  assert.equal(imported,true);
+  assert.equal(await js('Array.from(document.querySelectorAll("#example option")).some(o=>o.value==="saved:Imported 7")'),true);
+  ok('Import JSON validates and adds a named program to localStorage');
   await example('primes');
   await js("(()=>{const e=document.querySelector('#example');e.value='saved:Demo 42';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
   assert.equal((await view()).source,customSource);
@@ -203,6 +235,15 @@ try {
   await js("document.querySelector('#diagnostics button').click()");
   assert.equal(await js("document.activeElement?.id"),'source');
   ok('compiler errors switch to Diagnostics and jump to the native editor');
+  await source('define class Point as\nend\npub fnc main(): int { return 42; }');
+  s=await run('error', "top-level 'define'");
+  assert.match(s.diagnostics, /deployed compiler does not support top-level define/);
+  assert.equal(s.bytes, '—');
+  assert.equal(s.downloadDisabled, true);
+  assert.equal(await js("document.querySelector('#status').textContent"), 'Compiler feature unavailable');
+  await source('pub fnc main(): int { return 42; }');
+  await run('success', 'main() → 42');
+  ok('unsupported define reports compiler limitation with no artifact, then real Wasm recovers');
   await source('fnc main() -> int { return 2 + ; }');
   s=await run('error','E_SYNTAX');
   assert.equal(s.downloadDisabled,true);

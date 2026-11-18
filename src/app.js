@@ -1,6 +1,6 @@
 import { createWorkerTask } from './worker-task.js';
 import { installEditor } from './editor.js';
-import { formatDiagnostic, formatWasm } from './ui.js';
+import { formatDiagnostic, formatWasm, compilerDiagnosticGuidance } from './ui.js';
 import { installProgramPicker } from './program-picker.js';
 import { mapFormatCaret } from './formatter-runtime.js';
 // Example programs live in /examples as real .atto files; each one is also
@@ -33,7 +33,9 @@ const wasmPreview = document.querySelector('#wasm-preview');
 const picker = installProgramPicker({
   selector, editor, nameInput: document.querySelector('#program-name'),
   saveButton: document.querySelector('#save-custom'), deleteButton: document.querySelector('#delete-custom'),
-  savedGroup: document.querySelector('#saved-programs'), status, loadSample
+  savedGroup: document.querySelector('#saved-programs'), status, loadSample,
+  exportButton: document.querySelector('#export-custom'), importButton: document.querySelector('#import-custom'),
+  importFile: document.querySelector('#import-file')
 });
 const tabNames = ['console', 'diagnostics', 'wasm'];
 const tabButtons = tabNames.map(name => document.querySelector('#tab-' + name));
@@ -65,6 +67,14 @@ function showDiagnostic(value) {
   link.setAttribute('aria-label', 'Go to line ' + item.line + ', column ' + item.column + ': ' + item.message);
   link.addEventListener('click', () => jumpTo(item.line, item.column));
   diagnostics.replaceChildren(link);
+  const guidance = compilerDiagnosticGuidance(item);
+  if (guidance) {
+    const hint = document.createElement('p');
+    hint.className = 'diagnostic-guidance';
+    hint.textContent = guidance; // DOM text only; never interpolate source or diagnostics as HTML.
+    diagnostics.append(hint);
+  }
+  return Boolean(guidance);
 }
 const jumpTo = installEditor(editor, {
   gutter: document.querySelector('#line-gutter'),
@@ -81,6 +91,48 @@ const COMPILE_DEADLINE_MS = 10000;
 const RUN_DEADLINE_MS = 3000;
 let runGeneration = 0;
 let lastWasm = null;
+
+const splitter = document.querySelector('#splitter');
+const workbench = document.querySelector('.workbench');
+let editorPaneWidth = 53;
+function resizeEditorPane(value) {
+  if (!Number.isFinite(value)) return;
+  editorPaneWidth = Math.max(25, Math.min(75, Math.round(value)));
+  workbench.style.setProperty('--editor-pane-width', editorPaneWidth + '%');
+  splitter.setAttribute('aria-valuenow', String(editorPaneWidth));
+}
+function resizeFromPointer(event) {
+  const bounds = workbench.getBoundingClientRect();
+  if (bounds.width > 0) resizeEditorPane((event.clientX - bounds.left) * 100 / bounds.width);
+}
+splitter.addEventListener('pointerdown', event => {
+  if (event.button !== 0 && event.pointerType !== 'touch') return;
+  event.preventDefault();
+  splitter.setPointerCapture(event.pointerId);
+  resizeFromPointer(event);
+});
+splitter.addEventListener('pointermove', event => {
+  if (splitter.hasPointerCapture(event.pointerId)) resizeFromPointer(event);
+});
+function endResize(event) {
+  if (splitter.hasPointerCapture(event.pointerId)) splitter.releasePointerCapture(event.pointerId);
+}
+splitter.addEventListener('pointerup', endResize);
+splitter.addEventListener('pointercancel', endResize);
+splitter.addEventListener('dblclick', () => resizeEditorPane(53));
+splitter.addEventListener('keydown', event => {
+  const next = {
+    ArrowLeft: editorPaneWidth - 5,
+    ArrowRight: editorPaneWidth + 5,
+    Home: 25,
+    End: 75,
+    '0': 53
+  }[event.key];
+  if (next === undefined) return;
+  event.preventDefault();
+  resizeEditorPane(next);
+});
+
 
 function display(message, kind = 'neutral') {
   output.textContent = message;
@@ -114,8 +166,8 @@ async function run() {
     const compiled = await workerTask.request(new URL('./compiler-worker.js', import.meta.url), { source: editor.value }, COMPILE_DEADLINE_MS, 'Compilation');
     if (generation !== runGeneration) return;
     if (!compiled.ok) {
-      showDiagnostic(compiled.diagnostics?.[0]);
-      status.textContent = 'Compiler error';
+      const missingFeature = showDiagnostic(compiled.diagnostics?.[0]);
+      status.textContent = missingFeature ? 'Compiler feature unavailable' : 'Compiler error';
       selectTab('diagnostics');
       display('Compilation failed. No WebAssembly artifact was produced.', 'error');
       return;

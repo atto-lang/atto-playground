@@ -74,3 +74,32 @@ test('memory-like bytes in custom sections cannot be confused with memory declar
   assert.equal(WebAssembly.validate(bytes), true);
   assert.equal(admitWasm32Memory(bytes).memoryCount, 1);
 });
+
+test('Wasm import preflight rejects imported memory, other foreign resources and malformed imports', () => {
+  const types = section(1, [1, 0x60, 0, 0]);
+  const memoryImport = section(2, [1, ...name('env'), ...name('memory'), 2, 1, 1, 16]);
+  const memoryBytes = new Uint8Array([...header, ...memoryImport]);
+  assert.equal(WebAssembly.validate(memoryBytes), true);
+  assert.throws(() => admitWasm32Memory(memoryBytes), /E_ACTOR_MEMORY: imported memory not admitted/);
+  const allowedFn = new Uint8Array([...header, ...types,
+    ...section(2, [1, ...name('atto'), ...name('print_newline'), 0, 0])]);
+  assert.equal(WebAssembly.validate(allowedFn), true);
+  assert.equal(admitWasm32Memory(allowedFn).memoryCount, 0);
+  const globalImport = new Uint8Array([...header, ...section(2, [1, ...name('env'), ...name('g'), 3, 0x7f, 0])]);
+  assert.equal(WebAssembly.validate(globalImport), true);
+  assert.throws(() => admitWasm32Memory(globalImport), /non-function import/);
+  assert.throws(() => admitWasm32Memory(new Uint8Array([...header, ...section(2, [1, 127])])), /malformed Wasm import bounds/);
+});
+
+test('start functions are rejected before guest instantiation', async () => {
+  const type = section(1, [1, 0x60, 0, 0]);
+  const func = section(3, [1, 0]);
+  const start = section(8, [0]); // valid start index, no host imports needed
+  const code = section(10, [1, 2, 0, 0x0b]);
+  const bytes = new Uint8Array([...header, ...type, ...func, ...start, ...code]);
+  assert.equal(WebAssembly.validate(bytes), true);
+  assert.throws(() => admitWasm32Memory(bytes), /E_GUEST_ABI: Wasm start functions not admitted/);
+  const response = await run_tenant(bytes);
+  assert.equal(response.ok, false);
+  assert.match(response.message, /^E_GUEST_ABI:/);
+});

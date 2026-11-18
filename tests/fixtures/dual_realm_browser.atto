@@ -1,0 +1,17 @@
+// Shared Auth dual-realm predicate projected to the M0 Atto browser subset.
+// This fixture is NOT the same source file as shared-auth-formal #8:
+// its source-level module declaration is not accepted by the browser compiler.
+// Do not treat this as JWT, persistence, or five-backend verification.
+fnc may_accept(bool first_realm_healthy, bool second_realm_healthy, bool revoked): bool {
+  if first_realm_healthy, second_realm_healthy, !revoked then
+    return true;
+  fi
+  return false;
+}
+
+fnc may_refresh(bool first_realm_healthy, bool second_realm_healthy, bool token_current): bool {
+  if first_realm_healthy, second_realm_healthy, token_current then
+    return true;
+  fi
+  return false;
+}
