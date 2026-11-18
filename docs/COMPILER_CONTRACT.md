@@ -23,11 +23,12 @@ The compiler adds no syntax of its own:
 | --- | --- |
 | Declarations | `[pub] fnc` / `routine`, `: T` or `-> T`, brace body; parameters `int a`, `int mut a`; arity overloads |
 | Entry point | zero-argument `main` returning `int` or `void` |
-| Types | `int`, `bool` / `boolean`, `void` |
-| Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred |
-| Control flow | `if … then … elif … else … fi`, brace form closed by `fi`, `while … do … done`, `loop { }`, `for (let i = 0; i < n; i++)`, `break`, `continue` |
-| Expressions | `+ - *`, `< <= > >=`, `eq neq == !=`, `!`, ternary, `,` / `\|` in conditions (both sides are evaluated), `And` / `Or` / `Xor` |
-| Output | `stdio.print` / `stdio.println` of `int`, `bool`, string literals and objects |
+| Types | `int`, `bool` / `boolean`, `float` / `f64` (binary64), `string` / `String`, `void` |
+| Bindings | `val` / `const` (immutable), `let` (reassignable); `name: T`, `T name` or inferred; immutable `int x = 7;` for `int`, `bool`, `string`, `String` |
+| Control flow | `if … then … elif … else … fi`, brace form closed by `fi`, `while … do … done`, `loop { }`, `for (let i = 0; i < n; i++)`, `break`, `continue`, `match` (legacy arms and canonical `match x over on P -> { } end`; literal, `_`, binding and `Enum.Variant` patterns; guards; exhaustiveness checked) |
+| Expressions | `+ - *` (int, float; an int operand widens), `/` with a float operand, `+` of two strings, `< <= > >=` (numbers; strings in Java `compareTo` order), `eq neq == !=`, `!`, ternary, `,` / `\|` in conditions (both sides are evaluated), `And` / `Or` / `Xor` |
+| Output | `stdio.print` / `stdio.println` of `int`, `bool`, `float` (Java `Double.toString`), strings and objects |
+| Strings | `trim()`, `starts_with`, `ends_with`, `contains_literal`; content `eq` |
 | Classes | `[pub] define class Name as … end`: fields, one `constructor`, private-by-default methods, `pub static fnc` called as `Name.f()`, `new Name(…)`, moves |
 | Actors | `define actor Name as … end`: `let` state, `receive(ActorMail<int\|bool> mail): void`, `spawn Name()`, `ref.send(v)` |
 | Enums | `define enum Name as A B end` (the oreslang-source.llvm v1 design spelling; Java does not parse it yet) |
@@ -53,23 +54,29 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 
 `src/compiler.js` checks the ABI version and output bounds. It copies the result out before the next compile.
 
+### Versioned actor ABI handshake (v3 is not executable)
+
+The pinned compiler still emits `atto.browser.guest.v2`. Legacy guest Wasm without the custom section `atto.actor.abi` and explicitly tagged `02 00` guests stay on the synchronous v2 runtime. A compiled module marked exactly `03 00` is recognized as **proposed v3** and rejected with `E_GUEST_ABI_UNSUPPORTED` before a guest instance is instantiated. Duplicate, truncated, trailing-byte, and unknown-version markers fail closed with `E_GUEST_ABI`. Browser, disposable Node workers, persistent Node sessions, and legacy actor worker entrypoints must all enforce this boundary.
+
+This is version negotiation and safety hardening, **not** an implementation of resumable actor execution, compiler-lowered suspension, owned continuation frames, or instruction budgets. The draft `atto-platform-conformance` ABI v3 contract must pass real compiled-Atto execution tests before v3 can be enabled.
+
 ## Guest contract `atto.browser.guest.v2`
 
-- **Exports:** `main: () -> i64` and `panic_code: mut i32` (1 = integer overflow, 2 = division by zero, which is reserved, 3 = object heap exhausted). `memory` is exported only for string literals or classes, and with classes it is a fixed 1 MiB. Programs with actors also export `actor_init` and `actor_receive`, and carry an `atto.actors` custom section of type names.
-- **Imports:** only from module `atto`: `print_i64`, `print_bool`, `print_str` and `print_newline`, plus `actor_spawn` and `actor_send` for programs with actors. `src/guest.js` refuses any other import, validates the actor table, and caps stdout at 64 KiB.
+- **Exports:** `main: () -> i64` and `panic_code: mut i32` (1 = integer overflow, 2 = division by zero, which is reserved, 3 = heap exhausted (objects and joined strings)). `memory` is exported only for string literals or classes, and with classes it is a fixed 1 MiB. Programs with actors also export `actor_init` and `actor_receive`, and carry an `atto.actors` custom section of type names.
+- **Imports:** only from module `atto`: `print_i64`, `print_bool`, `print_str`, `print_newline` and `print_f64` (formatted like Java `Double.toString` by `formatJavaDouble` in `src/guest.js`), plus `actor_spawn` and `actor_send` for programs with actors. `src/guest.js` refuses any other import, validates the actor table, and caps stdout at 64 KiB.
 
 ### Actors in Web Workers
 
 `src/runner-worker.js` runs `main`. When a guest has actors, `src/actor-host.js` grants `actor_spawn` and `actor_send`:
 
-- Each `spawn` starts one dedicated Web Worker (`src/actor-worker.js`) with a private copy of the module. Actor state lives in that instance's globals, so actors share no memory.
-- `send` posts mail with sequence numbers from 0. The actor worker handles mail strictly in order and reports each completion. The host rejects out-of-order or unexpected replies.
+- The runner worker acts as one disposable tenant Worker per execution. Every `spawn` creates a separate `WebAssembly.Instance` from the same compiled `WebAssembly.Module`. Actors have private globals and, when declared by the compiled module, separate private linear memories; no per-actor Worker is created.
+- `send` queues mail with sequence numbers from 0. The tenant runtime drains one message per actor per round-robin pass, preserving each actor's FIFO order and preventing one busy mailbox from starving other completed handlers.
 - Limits: 16 actors per run and 10,000 messages per actor (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`). Actors cannot spawn or send.
 - The run ends when `main` has returned and every mailbox has drained, which matches the Java reference. Output from different actors may interleave in any order.
-- A panicking actor fails the run as `E_PANIC: … in actor Name#n` and stops receiving mail.
-- Stop and the 3-second deadline terminate the runner worker, which ends every actor worker it owns.
+- A trapping actor is marked failed; the tenant continues draining healthy sibling actors, then reports the first fault as `E_RUNTIME` or `E_PANIC` with the actor identity. A non-returning guest call still blocks the tenant Worker until the outer deadline kills it.
+- Stop and the 3-second deadline terminate the runner worker, invalidating every actor instance and mailbox in that tenant.
 
-Each guest runs in a fresh worker with a 3-second deadline, which ends infinite loops. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
+Each guest runs in a fresh tenant worker with a 3-second deadline, which ends infinite loops by killing the *whole tenant*, not just the looping actor. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
 
 ## Static release and disclosure gate
 
@@ -78,3 +85,10 @@ The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`.
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v2` intentionally permits bounded stdout imports, memory for string literals and objects, and the bounded actor capabilities. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
+
+
+## Tenant memory admission (v2)
+
+`src/wasm-memory-admission.js` parses the verified guest Wasm bytes **before** the first guest instance is constructed. The tenant runner rejects memory64, shared, unbounded and multiple memories, malformed declarations and declared Wasm32 maxima exceeding **16 × 64 KiB pages (1 MiB)**. This matches the pinned v2 class/string heap budget; it is not a configurable actor arena.
+
+Every actor is still a separate Wasm instance with separate globals. A legacy scalar-only actor guest may have **no linear memory at all** until `atto-source.rs#61` is rebuilt and vendored through the compiler receipt gate; the planned updated emitter exports one bounded 64 KiB memory for those actors. There is no compiler-managed suspended stack, actor-local preemption or general `await` support in v2. On a non-yielding Wasm call, only the parent deadline can terminate the entire worker.

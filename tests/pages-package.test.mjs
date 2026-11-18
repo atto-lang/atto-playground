@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, posix } from 'node:path';
 import { packagePages, PAGES_ASSETS } from '../scripts/package-pages.mjs';
 
 const releaseWasm = await readFile(new URL('../public/atto_compiler.wasm', import.meta.url));
@@ -104,4 +104,27 @@ test('forged formatter receipt or Wasm is rejected before staging', async t => {
   await writeFile(join(root,'public/oreslang_format.wasm'),'bad-wasm');
   await assert.rejects(packagePages({root}),/Invalid compiler Wasm/);
   await assert.rejects(readdir(join(root,'_site')),/ENOENT/);
+});
+
+
+test('every local browser module import belongs to the published asset allowlist', async () => {
+  const assets = new Set(PAGES_ASSETS);
+  for (const name of PAGES_ASSETS.filter(p => p.endsWith('.js'))) {
+    const source = await readFile(new URL('../' + name, import.meta.url), 'utf8');
+    // Static imports, re-exports, side-effect imports and literal dynamic
+    // imports must resolve to published files. The browser E2E remains the
+    // authoritative check for nonliteral runtime URL construction.
+    const dependencies = source.matchAll(/\b(?:from\s*|import\s*\(?\s*)(['"])(\.{1,2}\/[^'"]+)\1/g);
+    for (const match of dependencies) {
+      const target = posix.normalize(posix.join(posix.dirname(name), match[2].split('?')[0]));
+      assert.ok(assets.has(target), name + ' depends on omitted Pages asset ' + target);
+    }
+  }
+  for (const essential of [
+    'src/actor-abi-version.js',
+    'src/tenant-actor-host.js',
+    'src/wasm-memory-admission.js',
+  ]) {
+    assert.ok(assets.has(essential), essential + ' must ship with the actor runtime');
+  }
 });

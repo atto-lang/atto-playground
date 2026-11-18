@@ -1,10 +1,27 @@
 /** Host side of guest contract atto.browser.guest.v2 (see docs/COMPILER_CONTRACT.md). */
 export const STDOUT_LIMIT = 64 * 1024;
-const PRINT = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline']);
+const PRINT = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline', 'print_f64']);
 const ACTOR = new Set(['actor_spawn', 'actor_send']);
 const ALLOWED_EXPORTS = new Set(['main', 'panic_code', 'memory', 'actor_init', 'actor_receive']);
 export const MAX_ACTOR_TYPES = 256;
 const ACTOR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+/** Render a float exactly like Java Double.toString (JDK 19+: shortest
+ *  round-trip digits, as ECMAScript); plain for 1e-3 <= |x| < 1e7 with at
+ *  least one fraction digit, otherwise "d.dddE±n". */
+export function formatJavaDouble(x) {
+  if (Number.isNaN(x)) return 'NaN';
+  if (x === Infinity) return 'Infinity';
+  if (x === -Infinity) return '-Infinity';
+  if (x === 0) return Object.is(x, -0) ? '-0.0' : '0.0';
+  const abs = Math.abs(x);
+  if (abs >= 1e-3 && abs < 1e7) {
+    const text = String(x);
+    return text.includes('.') ? text : text + '.0';
+  }
+  const [mantissa, exponent] = x.toExponential().split('e');
+  return (mantissa.includes('.') ? mantissa : mantissa + '.0') + 'E' + exponent.replace('+', '');
+}
 
 /** Append guest output, capping it at STDOUT_LIMIT UTF-16 units without
  *  ever leaving half of a surrogate pair at the cut. */
@@ -88,6 +105,7 @@ export function guestImports(module, out, actors = null) {
       write(decoder.decode(new Uint8Array(memory.buffer, ptr, len)));
     },
     print_newline: () => write('\n'),
+    print_f64: value => write(formatJavaDouble(value)),
     actor_spawn: actors ? type => actors.spawn(type) : denied,
     actor_send: actors ? (ref, value) => actors.send(ref, value) : denied,
   };
@@ -99,7 +117,11 @@ export function describePanic(instance, error) {
   const code = instance.exports.panic_code?.value ?? 0;
   if (code === 1) return 'E_PANIC: integer overflow';
   if (code === 2) return 'E_PANIC: division by zero';
-  if (code === 3) return 'E_PANIC: object heap exhausted';
+  if (code === 3) return 'E_PANIC: heap exhausted (objects and joined strings share a fixed 1 MiB heap)';
+  if (code === 4) return 'E_PANIC: invalid generator handle or state';
+  if (code === 5) return 'E_PANIC: generator step budget exhausted (a pull ran too long without yielding)';
+  // Compiler-enforced logical stack quota (spec ch. 25): same depth in every engine.
+  if (code === 6) return 'E_PANIC: stack overflow (more than 1024 nested recursive calls)';
   if (error instanceof RangeError) return 'E_PANIC: stack exhausted (recursion too deep)';
   // host capability errors (actor limits) already carry their own code
   if (typeof error?.message === 'string' && /^E_[A-Z_]+: /.test(error.message)) return error.message;
