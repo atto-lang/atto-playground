@@ -142,3 +142,29 @@ test('closing during a yield cancels queued Wasm mail instead of resuming dead i
   assert.equal(host.memoryBytes, 0);
   assert.throws(() => host.send(a, 1n), /tenant closed/);
 });
+
+test('tenant Wasm actor host uses keyed refs and rejects stale incarnations', async () => {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const key = { namespace: 'vhost/example', actor_type: 0, application_key: 'queue/orders' };
+  const virtual = host.registry.ref_for(key);
+  assert.equal(host.registry.lookup(virtual), null, 'obtaining a virtual key never spawns');
+  const original = host.registry.register(virtual);
+  assert.equal(host.registry.get_or_create(virtual), original.ref);
+  host.registry.send(original.ref, 5n);
+  // Explicit retirement must discard admitted-but-unprocessed messages.
+  assert.equal(host.registry.unregister(virtual, original.token), true);
+  assert.equal(host.memoryBytes, 0);
+  const successor = host.registry.register(virtual);
+  assert.ok(successor.ref.incarnation > original.ref.incarnation);
+  assert.equal(host.registry.unregister(virtual, original.token), false);
+  assert.throws(() => host.registry.send(original.ref, 6n), /E_ACTOR_REF_STALE/);
+  host.registry.send(successor.ref, 9n);
+  host.registry.send(successor.ref, 10n);
+  assert.equal(await host.drain(), null);
+  assert.equal(out.text, '12', 'only the new guest Wasm instance processed two messages');
+  assert.equal(host.memoryBytes, 65536, 'retired actor memory was released');
+  host.close();
+  assert.equal(host.memoryBytes, 0);
+});
