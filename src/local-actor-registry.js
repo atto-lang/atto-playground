@@ -33,13 +33,21 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
   if ([spawn, send, isLive, retire].some(fn => typeof fn !== 'function')) {
     throw new TypeError('E_ACTOR_REGISTRY: host lifecycle callbacks required');
   }
-  // Identity is private to this registry instance. Tokens and physical refs
-  // are capability objects; exposing a numeric actor slot would allow forgery.
+  // Snapshot the type table: callers must not change logical identity or its
+  // UTF-8 budget by mutating a names array after registry construction.
+  const actorNames = Object.freeze(names.map(n => validText(n, 'actor name')));
+  // Capabilities and the epoch are deliberately unexported. Never expose
+  // physical slots to guest code.
   const epoch = Object.freeze({});
   const entries = new Map();
-  const generations = new Map();
   const creating = new Set();
   const physical = new WeakMap();
+  // Global monotonic BigInt avoids an unbounded per-key incarnation tombstone
+  // map while still preventing ABA within this registry's unique epoch.
+  let nextIncarnation = 0n;
+  // A host physical slot must not be reused in one registry lifetime: the
+  // existing actor hosts allocate monotonically and never recycle slots.
+  const seenSlots = new Set();
   let closed = false;
 
   function normalize(value) {
@@ -51,7 +59,7 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     if (!Number.isInteger(actor_type) || actor_type < 0 || actor_type >= names.length) {
       throw new TypeError('E_ACTOR_KEY: unknown actor type');
     }
-    if (utf8.encode(namespace).length + utf8.encode(names[actor_type]).length +
+    if (utf8.encode(namespace).length + utf8.encode(actorNames[actor_type]).length +
         utf8.encode(application_key).length > MAX_KEY_BYTES) {
       throw new TypeError('E_ACTOR_KEY: key exceeds 4096 UTF-8 bytes');
     }
@@ -82,6 +90,16 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     return active(entry) ? entry.ref : null;
   }
 
+  function rollback(slot) {
+    try {
+      retire(slot);
+    } catch (cause) {
+      // Never report rollback as successful if an actor may remain alive.
+      close();
+      throw new Error('E_ACTOR_REGISTRY_ROLLBACK: unable to retire rejected activation', { cause });
+    }
+  }
+
   function register(key) {
     checkedOpen();
     const normalized = normalize(key);
@@ -89,27 +107,45 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     const existing = entries.get(id);
     if (active(existing)) return Object.freeze({ ref: existing.ref, token: null, created: false });
     if (creating.has(id)) throw new Error('E_ACTOR_REGISTRY_RECURSIVE: same-key recursive activation');
-    // JS synchronous host execution makes activation + publication atomic
-    // within this event loop. No async factory or promise gap is supported.
+    // Synchronous JS event-loop activation is atomic with publication.
+    // Async factories and distributed single-flight remain out of scope.
     creating.add(id);
     try {
       const slot = spawn(normalized.actor_type);
-      if (!Number.isSafeInteger(slot) || slot < 0 || !isLive(slot)) {
-        throw new Error('E_ACTOR_REGISTRY_DEAD: activation did not produce a live actor');
+      if (!Number.isSafeInteger(slot) || slot < 0) {
+        throw new Error('E_ACTOR_REGISTRY_DEAD: activation returned an invalid slot');
       }
-      const incarnation = (generations.get(id) ?? 0n) + 1n;
-      generations.set(id, incarnation); // Retained after unregister: no ABA.
+      if (seenSlots.has(slot)) {
+        // Never retire the aliased slot: it could belong to another live key.
+        throw new Error('E_ACTOR_REGISTRY_SLOT_REUSE: physical slot was already issued');
+      }
+      seenSlots.add(slot);
+      // isLive itself may be a reentrant host callback that closes registry.
+      let live;
+      try {
+        live = isLive(slot);
+      } catch (cause) {
+        rollback(slot);
+        throw cause;
+      }
+      if (closed || !live) {
+        rollback(slot);
+        throw new Error(closed
+          ? 'E_ACTOR_REGISTRY_CLOSED: activation cancelled during shutdown'
+          : 'E_ACTOR_REGISTRY_DEAD: activation did not produce a live actor');
+      }
+      nextIncarnation += 1n;
       const token = Object.freeze({});
       const ref = Object.freeze({
         kind: 'ActorRef', actor_type: normalized.actor_type,
         namespace: normalized.namespace, application_key: normalized.application_key,
-        incarnation
+        incarnation: nextIncarnation
       });
       physical.set(ref, { epoch, slot });
       entries.set(id, { ref, slot, token });
       return Object.freeze({ ref, token, created: true });
     } finally {
-      creating.delete(id); // Failed activations never strand the key.
+      creating.delete(id);
     }
   }
 
@@ -122,8 +158,14 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     const id = identity(normalize(key));
     const current = entries.get(id);
     if (!current || !token || current.token !== token) return false;
-    entries.delete(id); // Remove first; stale cleanup cannot find successor.
-    retire(current.slot);
+    entries.delete(id); // Stale cleanup cannot remove a successor.
+    try {
+      retire(current.slot);
+    } catch (cause) {
+      // Unknown physical liveness must never permit another keyed activation.
+      close();
+      throw new Error('E_ACTOR_REGISTRY_RETIRE_FAILED: registry quarantined', { cause });
+    }
     return true;
   }
 
@@ -148,8 +190,7 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     closed = true;
     entries.clear();
     creating.clear();
-    // Retained only until this registry instance is unreachable.
-    generations.clear();
+    seenSlots.clear(); // Registry stays closed; no future allocation possible.
   }
 
   return Object.freeze({
