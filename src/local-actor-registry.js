@@ -86,8 +86,12 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
 
   function lookup(key) {
     checkedOpen();
-    const entry = entries.get(identity(normalize(key)));
-    return active(entry) ? entry.ref : null;
+    const id = identity(normalize(key));
+    const entry = entries.get(id);
+    const live = active(entry);
+    // An injected host callback may close the registry or retire the entry.
+    checkedOpen();
+    return live && entries.get(id) === entry ? entry.ref : null;
   }
 
   function rollback(slot) {
@@ -105,7 +109,11 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     const normalized = normalize(key);
     const id = identity(normalized);
     const existing = entries.get(id);
-    if (active(existing)) return Object.freeze({ ref: existing.ref, token: null, created: false });
+    const live = active(existing);
+    checkedOpen();
+    if (live && entries.get(id) === existing) {
+      return Object.freeze({ ref: existing.ref, token: null, created: false });
+    }
     if (creating.has(id)) throw new Error('E_ACTOR_REGISTRY_RECURSIVE: same-key recursive activation');
     // Synchronous JS event-loop activation is atomic with publication.
     // Async factories and distributed single-flight remain out of scope.
@@ -179,6 +187,10 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     const current = entries.get(id);
     if (!current || current.ref !== ref || !isLive(target.slot)) {
       throw new Error('E_ACTOR_REF_STALE: activation no longer live');
+    }
+    checkedOpen();
+    if (entries.get(id) !== current) {
+      throw new Error('E_ACTOR_REF_STALE: activation retired during resolution');
     }
     // Host send() is the admission linearization point, not the lookup.
     // A successful return never asserts a completed or durable delivery.
