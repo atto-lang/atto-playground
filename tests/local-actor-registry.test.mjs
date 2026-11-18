@@ -524,3 +524,72 @@ test('retirement liveness probe throwing quarantines instead of permitting react
   assert.throws(() => registry.unregister(key('q'), registration.token), /E_ACTOR_REGISTRY_RETIRE_FAILED/);
   assert.throws(() => registry.get_or_create(key('q')), /E_ACTOR_REGISTRY_CLOSED/);
 });
+
+
+test('reentrant liveness probe may not overwrite a successor incarnation', () => {
+  let registry, token, reenter = false, nextSlot = 0;
+  const alive = new Set();
+  registry = createLocalActorRegistry({
+    names: ['Queue'],
+    spawn() { const slot = nextSlot++; alive.add(slot); return slot; },
+    send() {},
+    isLive(slot) {
+      if (reenter && slot === 0) {
+        reenter = false;
+        assert.equal(registry.unregister(key('q'), token), true);
+        registry.register(key('q'));
+        return true; // The old liveness probe returns a deliberately stale result.
+      }
+      return alive.has(slot);
+    },
+    retire(slot) { alive.delete(slot); return true; }
+  });
+  const first = registry.register(key('q'));
+  token = first.token;
+  reenter = true;
+  assert.throws(() => registry.register(key('q')), /E_ACTOR_REGISTRY_REENTRANT/);
+  assert.equal(registry.size, 1);
+  const replacement = registry.lookup(key('q'));
+  assert.equal(replacement.incarnation, 2n);
+  assert.notEqual(replacement, first.ref);
+  assert.throws(() => registry.send(first.ref, 1n), /E_ACTOR_REF_STALE/);
+});
+
+
+test('real Worker host group/pubsub fanout preserves bounded FIFO and stale pruning', async () => {
+  const deliveries = [];
+  class TestWorker {
+    constructor() { this.alive = true; }
+    postMessage(data) {
+      if (data.kind === 'init') {
+        queueMicrotask(() => { if (this.alive) this.onmessage?.({ data: { kind: 'ready' } }); });
+      } else if (data.kind === 'mail') {
+        deliveries.push(data.value);
+        queueMicrotask(() => {
+          if (this.alive) this.onmessage?.({ data: { kind: 'done', sequence: data.sequence } });
+        });
+      }
+    }
+    terminate() { this.alive = false; }
+  }
+  const host = createActorHost({
+    wasm: new Uint8Array([0,97,115,109,1,0,0,0]),
+    names: ['Queue'], out: { text: '', truncated: false },
+    WorkerImpl: TestWorker, workerUrl: 'test-worker.js'
+  });
+  const k = key('q');
+  const registered = host.registry.register(k);
+  const topic = { namespace: 'tenant-a', actor_type: 0, group_name: 'updates' };
+  const membership = host.pubsub.subscribe(topic, registered.ref);
+  assert.deepEqual(host.groups.members(topic), [registered.ref]);
+  assert.deepEqual(host.pubsub.publish(topic, 21n),
+    { attempted: 1, admitted: 1, failed: 0, stale: 0 });
+  assert.equal(await host.drain(), null);
+  assert.deepEqual(deliveries, [21n]);
+  assert.equal(host.registry.unregister(k, registered.token), true);
+  assert.deepEqual(host.groups.members(topic), []);
+  assert.equal(host.groups.membership_count, 0);
+  assert.equal(host.pubsub.unsubscribe(topic, membership), false);
+  host.close();
+  assert.throws(() => host.pubsub.publish(topic, 3n), /E_ACTOR_GROUP_CLOSED/);
+});

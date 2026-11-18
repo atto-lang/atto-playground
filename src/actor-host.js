@@ -7,6 +7,7 @@
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
 import { createLocalActorRegistry } from './local-actor-registry.js';
+import { createLocalActorGroups, createLocalPubSub } from './local-actor-groups.js';
 import { appendCapped } from './guest.js';
 
 export const MAX_ACTORS = 16;
@@ -130,6 +131,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function close() {
     if (closed) return;
     closed = true;
+    groups.close();
     registry.close();
     for (const a of actors) terminate(a);
     // Explicit shutdown must settle an outstanding drain, never hang callers.
@@ -145,6 +147,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   }
 
   const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
-  return { spawn, send, getOrCreate, drain, close, isLive, retire, registry,
+  const groups = createLocalActorGroups({ registry });
+  const pubsub = createLocalPubSub(groups);
+  return { spawn, send, getOrCreate, drain, close, isLive, retire, registry, groups, pubsub,
     get count() { return actors.length; } };
 }
