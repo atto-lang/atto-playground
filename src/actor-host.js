@@ -70,12 +70,19 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
     const a = { ref, type, name: names[type], sent: 0, done: 0, ready: false, failed: false, terminated: false, worker: null };
-    a.worker = new WorkerImpl(workerUrl, { type: 'module' });
-    a.worker.onmessage = event => onMessage(a, event.data);
-    a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
-    a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
-    // each actor gets a private copy of the module bytes
-    a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type });
+    try {
+      a.worker = new WorkerImpl(workerUrl, { type: 'module' });
+      a.worker.onmessage = event => onMessage(a, event.data);
+      a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
+      a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
+      // Each actor gets a private copy of the module bytes.
+      a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type });
+    } catch (error) {
+      // Failed initialization admission cannot leave an orphaned Worker.
+      // Do not consume an actor slot if the constructor or postMessage fails.
+      if (a.worker) terminate(a);
+      throw error;
+    }
     actors.push(a);
     return ref;
   }
