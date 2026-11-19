@@ -1,8 +1,8 @@
 /** Host side of guest contract atto.browser.guest.v2 (see docs/COMPILER_CONTRACT.md). */
 export const STDOUT_LIMIT = 64 * 1024;
 const PRINT = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline', 'print_f64']);
-const ACTOR = new Set(['actor_spawn', 'actor_send', 'actor_get_or_create']);
-const ALLOWED_EXPORTS = new Set(['main', 'panic_code', 'memory', 'actor_init', 'actor_receive']);
+const ACTOR = new Set(['actor_spawn', 'actor_send', 'actor_get_or_create', 'actor_job_ack']);
+const ALLOWED_EXPORTS = new Set(['main', 'panic_code', 'memory', 'actor_init', 'actor_receive', 'actor_receive_job']);
 export const MAX_ACTOR_TYPES = 256;
 const ACTOR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
@@ -76,6 +76,30 @@ export function actorNames(module) {
   return names;
 }
 
+/** Orthogonal opt-in job envelope marker, not the proposed actor_resume ABI v3.
+ * Every actor route bit has exactly one matching atto.actors entry. No
+ * unmarked legacy guest can silently acquire job-level capabilities. */
+export function jobActorModes(module, names) {
+  const versions=WebAssembly.Module.customSections(module,'atto.job.abi');
+  const routes=WebAssembly.Module.customSections(module,'atto.job.actors');
+  const hasJob=WebAssembly.Module.exports(module).some(x=>x.name==='actor_receive_job');
+  if (!versions.length && !routes.length) {
+    if (hasJob) throw new Error('E_ACTOR_JOB_ABI: unmarked actor_receive_job export');
+    return Object.freeze(names.map(()=>false));
+  }
+  if (versions.length!==1 || routes.length!==1) {
+    throw new Error('E_ACTOR_JOB_ABI: missing or duplicated job markers');
+  }
+  const ver=new Uint8Array(versions[0]);
+  const modes=new Uint8Array(routes[0]);
+  if (ver.length!==2 || ver[0]!==1 || ver[1]!==0 || !hasJob ||
+      modes.length!==names.length || !modes.some(x=>x===1) ||
+      !modes.every(x=>x===0 || x===1)) {
+    throw new Error('E_ACTOR_JOB_ABI: incompatible or malformed job actor table');
+  }
+  return Object.freeze(Array.from(modes,x=>x===1));
+}
+
 /** Validate a guest module's interface and build its import object.
  *  `out` collects stdout as `{ text, truncated }`. `actors` supplies the
  *  `spawn(type)` / `send(ref, value)` capabilities; without it a guest that
@@ -132,6 +156,9 @@ export function guestImports(module, out, actors = null) {
     actor_get_or_create: actors && typeof actors.getOrCreate === 'function'
       ? (type, namespace, applicationKey) => actors.getOrCreate(
           type, registryKey(namespace), registryKey(applicationKey))
+      : denied,
+    actor_job_ack: actors && typeof actors.jobAck === 'function'
+      ? (sequence, attempt) => actors.jobAck(sequence, attempt)
       : denied,
   };
   return { imports: { atto }, bind: instance => { memory = instance.exports.memory ?? null; } };
