@@ -8,6 +8,7 @@
  */
 import { createLocalActorRegistry } from './local-actor-registry.js';
 import { createLocalActorGroups, createLocalPubSub } from './local-actor-groups.js';
+import { createLocalActorJobRouter } from './local-actor-job-router.js';
 import { appendCapped } from './guest.js';
 
 export const MAX_ACTORS = 16;
@@ -155,6 +156,7 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function close() {
     if (closed) return;
     closed = true;
+    jobs.close();
     groups.close();
     registry.close();
     for (const a of actors) terminate(a);
@@ -172,7 +174,8 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
 
   const registry = createLocalActorRegistry({ names: admittedNames, spawn, send, isLive, retire });
   const groups = createLocalActorGroups({ registry });
+  const jobs = createLocalActorJobRouter({ registry, groups });
   const pubsub = createLocalPubSub(groups);
-  return { spawn, send, getOrCreate, drain, close, isLive, retire, registry, groups, pubsub,
+  return { spawn, send, getOrCreate, drain, close, isLive, retire, registry, groups, pubsub, jobs,
     get count() { return actors.length; } };
 }
