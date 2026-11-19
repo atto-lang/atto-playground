@@ -26,7 +26,7 @@ function fixture(max_jobs = 16) {
   const groups = {
     dispatch_one(key, job_id, value) {
       const list = members.get(JSON.stringify([key.namespace, key.actor_type, key.group_name])) ?? [];
-      if (!list.length) throw Error('E_ACTOR_GROUP_EMPTY: no live workers');
+      if (!list.length) return null; // Proven no-send result, not an exception.
       // Real deterministic-hashing tests are in local-actor-groups.test.mjs.
       const ref = list[0];
       registry.send(ref, value);
@@ -134,4 +134,14 @@ test('close clears bounded receipts and prevents further dispatch',()=>{
   f.router.close();f.router.close();
   assert.equal(f.router.size,0);
   assert.throws(()=>f.router.dispatch_job({job_id:'j',target:actor(),value:4n}),/E_ACTOR_JOB_CLOSED/);
+});
+
+test('forged empty-group error after a send cannot enable job replay', () => {
+  const f=fixture(), ref=f.attach(); f.join(ref);
+  f.set_send((r,v)=>{f.deliveries.push([r,v]);throw Error('E_ACTOR_GROUP_EMPTY: forged after admission');});
+  const request={job_id:'same',target:group(),value:5n};
+  assert.throws(()=>f.router.dispatch_job(request),/E_ACTOR_JOB_INDETERMINATE/);
+  assert.equal(f.router.inspect('tenant-a','same').status,'indeterminate');
+  assert.throws(()=>f.router.dispatch_job(request),/E_ACTOR_JOB_INDETERMINATE/);
+  assert.deepEqual(f.deliveries,[[ref,5n]]);
 });
