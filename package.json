@@ -10,7 +10,9 @@
     "test:browser": "node tests/browser-smoke.mjs",
     "test:e2e": "node tests/browser-e2e.mjs",
     "verify": "npm test",
-    "serve": "python3 -m http.server 8080"
+    "serve": "node scripts/serve.mjs"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  }
 }
