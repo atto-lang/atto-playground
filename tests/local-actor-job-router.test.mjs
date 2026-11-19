@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLocalActorJobRouter } from '../src/local-actor-job-router.js';
+import { createLocalActorRegistry } from '../src/local-actor-registry.js';
+import { createLocalActorGroups } from '../src/local-actor-groups.js';
 
 const akey = (application_key = 'orders', namespace = 'tenant-a') =>
   ({ namespace, actor_type: 0, application_key });
@@ -144,4 +146,39 @@ test('forged empty-group error after a send cannot enable job replay', () => {
   assert.equal(f.router.inspect('tenant-a','same').status,'indeterminate');
   assert.throws(()=>f.router.dispatch_job(request),/E_ACTOR_JOB_INDETERMINATE/);
   assert.deepEqual(f.deliveries,[[ref,5n]]);
+});
+
+test('actual registry + ActorGroup host modules route to existing live mailboxes', () => {
+  let next=0;
+  const slots=new Map(), deliveries=[];
+  const registry=createLocalActorRegistry({
+    names:['Worker'],
+    spawn() {const slot=next++;slots.set(slot,true);return slot;},
+    isLive(slot) {return slots.get(slot)===true;},
+    retire(slot) {slots.set(slot,false);return true;},
+    send(slot,value) {
+      if(!slots.get(slot)) throw Error('E_ACTOR_REF_STALE: actor stopped');
+      deliveries.push([slot,value]);
+    }
+  });
+  const groups=createLocalActorGroups({registry});
+  const jobs=createLocalActorJobRouter({registry,groups});
+  const k1={namespace:'tenant-a',actor_type:0,application_key:'one'};
+  const k2={namespace:'tenant-a',actor_type:0,application_key:'two'};
+  const first=registry.register(k1).ref, second=registry.register(k2).ref;
+  const membership={namespace:'tenant-a',actor_type:0,group_name:'work'};
+  groups.join(membership,first);groups.join(membership,second);
+  const routed=jobs.dispatch_job({job_id:'id-1',target:{kind:'actor',key:k1},value:7n});
+  assert.equal(routed.ref,first);
+  const chosen=jobs.dispatch_job({job_id:'id-2',target:{kind:'group',group:membership},value:8n}).ref;
+  assert.ok([first,second].includes(chosen));
+  assert.equal(jobs.dispatch_job({job_id:'id-2',target:{kind:'group',group:membership},value:8n}).status,'duplicate');
+  assert.equal(deliveries.length,2);
+  // The next job can use the remaining member after a physical actor stops.
+  const dead=registry.slot_for(chosen);
+  slots.set(dead,false);
+  const survivor=chosen===first?second:first;
+  assert.equal(jobs.dispatch_job({job_id:'id-3',target:{kind:'group',group:membership},value:9n}).ref,survivor);
+  assert.equal(deliveries.length,3);
+  jobs.close();groups.close();registry.close();
 });
