@@ -137,3 +137,51 @@ test('duplicate initialization is terminal and cannot reset actor mailbox state'
     assert.equal(w.events.length,2);
   }finally{w.close();}
 });
+
+test('child actor Worker rejects forged Wasm host-import signatures before actor init', async () => {
+  const leb = n => {
+    const bytes = [];
+    do { let b = n & 127; n >>>= 7; if (n) b |= 128; bytes.push(b); } while (n);
+    return bytes;
+  };
+  const str = name => {
+    const b = [...new TextEncoder().encode(name)];
+    return [...leb(b.length), ...b];
+  };
+  const section = (id, data) => [id, ...leb(data.length), ...data];
+  // Real valid Wasm, but the admitted atto.print_i64 name has (i32)->()
+  // rather than the versioned host ABI's required (i64)->() signature.
+  const forged = Uint8Array.from([
+    0,97,115,109,1,0,0,0,
+    ...section(1,[2, 0x60,1,0x7f,0, 0x60,0,1,0x7e]),
+    ...section(2,[1,...str('atto'),...str('print_i64'),0,0]),
+    ...section(3,[1,1]),
+    ...section(7,[1,...str('main'),0,1]),
+    ...section(10,[1,4,0,0x42,42,0x0b])
+  ]);
+  assert.equal(WebAssembly.validate(forged), true);
+  const w = await session();
+  try {
+    w.send({kind:'init',wasm:forged,type:0});
+    const response = await w.wait(1);
+    assert.equal(response.kind, 'fault');
+    assert.match(response.message,
+      /^E_GUEST_ABI: guest import signature mismatch: print_i64/);
+    assert.equal(response.stdout, '');
+    assert.equal(w.events.some(e => e.kind === 'ready'), false);
+  } finally { w.close(); }
+});
+
+test('child actor Worker refuses shared guest byte buffers before compilation', async () => {
+  if (typeof SharedArrayBuffer === 'undefined') return;
+  const shared = new Uint8Array(new SharedArrayBuffer(guest.length));
+  shared.set(guest);
+  const w = await session();
+  try {
+    w.send({kind:'init',wasm:shared,type:0});
+    const response = await w.wait(1);
+    assert.equal(response.kind,'fault');
+    assert.match(response.message,/^E_GUEST_ABI: private bounded guest bytes required/);
+    assert.equal(w.events.some(e => e.kind === 'ready'), false);
+  } finally {w.close();}
+});

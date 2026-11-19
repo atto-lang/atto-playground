@@ -1,5 +1,6 @@
 import { admitWasm32Memory } from './wasm-memory-admission.js';
 import { requireGuestAbiV2 } from './actor-abi-version.js';
+import { validateGuestImportABI } from './guest-import-abi.js';
 /* One AttoLang actor: a private instance of the program's guest module.
  * Messages are handled strictly in order; init compiles the module, runs
  * actor_init(type), then each mail calls actor_receive(type, value, sequence).
@@ -20,12 +21,18 @@ async function handle(data) {
   if (failed) return;
   try {
     if (data?.kind === 'init' && !instance) {
-      const wasm = data.wasm;
-      if (!(wasm instanceof Uint8Array) || wasm.byteLength > 1 << 20 || !WebAssembly.validate(wasm)) throw new Error('Invalid/oversized guest module');
+      const source = data.wasm;
+      if (!(source instanceof Uint8Array) || !(source.buffer instanceof ArrayBuffer) ||
+          source.byteLength > (1 << 20)) {
+        throw new Error('E_GUEST_ABI: private bounded guest bytes required');
+      }
+      const wasm = new Uint8Array(source); // child owns its exact validated bytes
+      if (!WebAssembly.validate(wasm)) throw new Error('Invalid/oversized guest module');
       if (!Number.isInteger(data.type) || data.type < 0) throw new Error('Invalid actor type');
       admitWasm32Memory(wasm);
       const module = await WebAssembly.compile(wasm);
       requireGuestAbiV2(module);
+      validateGuestImportABI(wasm, module, { allowFloat: true });
       if (data.type >= actorNames(module).length) throw new Error('Invalid actor type');
       const host = guestImports(module, out);
       const created = await WebAssembly.instantiate(module, host.imports);
