@@ -38,6 +38,7 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   let closed = false;
   let next = 1;
   let cooperativeYields = 0;
+  let reservedYields = 0; // pending JSPI turns count against the quota immediately
   let handlerActive = false;
   let scopeGeneration = 1;
   if (!Number.isInteger(maxYields) || maxYields < 1 || maxYields > 65536) throw Error('E_ASYNC: invalid yield quota');
@@ -71,13 +72,20 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   const cooperate = new jspi.Suspending(async () => {
     ensureOpen();
     const generation = scopeGeneration;
-    // Reserve the yield slot before suspending. Charging on resume allowed
-    // concurrent awaits to exceed maxYields while both were in flight.
-    if (cooperativeYields >= maxYields) throw Error('E_ASYNC: cooperative yield quota exhausted');
-    cooperativeYields += 1;
-    await new Promise(resolve => setTimeout(resolve, 0));
-    ensureOpen();
-    if (generation !== scopeGeneration) throw Error('E_ASYNC: stale cooperative continuation');
+    // Reserve before the first suspension. Counting only completed yields
+    // permits simultaneous already-ready awaits to oversubscribe this quota.
+    if (cooperativeYields + reservedYields >= maxYields) {
+      throw Error('E_ASYNC: cooperative yield quota exhausted');
+    }
+    reservedYields++;
+    try {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      ensureOpen();
+      if (generation !== scopeGeneration) throw Error('E_ASYNC: stale cooperative continuation');
+      cooperativeYields++;
+    } finally {
+      reservedYields--; // release even when a scope is cancelled mid-suspension
+    }
   });
   const sleep_ms = new jspi.Suspending(async n => {
     ensureOpen();

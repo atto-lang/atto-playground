@@ -375,6 +375,55 @@ pub fnc main(): int {
   assert.match(s.output,/1 actor in dedicated Web Workers/);
   ok('structured child task executes inside actor-owned Worker; no supervisor guest task execution');
 
+  // Real Chromium/JSPI contention: 48 immediate awaits are mandatory
+  // suspension points while this actor's mailbox remains non-reentrant.
+  const cooperativeBurst = `define actor Bursty as
+    let int count = 0;
+    suspends receive(ActorMail<int> mail): void {
+      await 42;
+      self.count = self.count + 1;
+      stdio.println(mail.sequence * 1000 + self.count);
+      return;
+    }
+  end
+  define actor Peer as
+    receive(ActorMail<int> mail): void {
+      stdio.println(900);
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val burst = spawn Bursty();
+    val peer = spawn Peer();
+    for (let i = 0; i < 48; i++) {
+      burst.send(1);
+    }
+    peer.send(1);
+    return 42;
+  }`;
+  await source(cooperativeBurst);
+  s = await run('success','main() → 42');
+  const burstLines=s.output.split('\nmain()')[0].trim().split('\n').map(Number);
+  const cleanBurst=burstLines.filter(x=>x!==900);
+  assert.ok(burstLines.includes(900),'sibling actor completes under burst contention');
+  assert.deepEqual(cleanBurst,Array.from({length:48},(_,i)=>i*1000+i+1),
+    '48 suspended mailboxes must resume in FIFO order without duplication or loss');
+  assert.match(s.output,/2 actors in dedicated Web Workers/);
+  ok('real Chromium: 48 immediate awaits preserve actor FIFO and sibling progress');
+
+  // Real Worker / real JSPI: restart a suspended actor while a sibling
+  // retains a separate Worker. Stale stdout from terminated incarnations
+  // must not be accepted into the new actor generation.
+  const browserRestart=await js("(async()=>{\n  const [{createCompiler},{createActorHost},{actorNames}] = await Promise.all([\n    import('./src/compiler.js'),\n    import('./src/actor-host.js'),\n    import('./src/guest.js'),\n  ]);\n  const response=await fetch('./public/atto_compiler.wasm',{cache:'no-store'});\n  if(!response.ok) throw Error('compiler binary unavailable');\n  const compiler=await createCompiler(new Uint8Array(await response.arrayBuffer()));\n  const result=compiler.compile(\"define actor Survivor as\\n  suspends receive(ActorMail<int> mail): void {\\n    await rt.sleep(500);\\n    stdio.println(mail.value);\\n    return;\\n  }\\nend\\npub fnc main(): int { return 0; }\");\n  if(!result.ok) throw Error('actor compiler failed: '+JSON.stringify(result.diagnostics));\n  const module=await WebAssembly.compile(result.wasm);\n  const out={text:'',truncated:false};\n  const host=createActorHost({\n    wasm:result.wasm,\n    names:actorNames(module),\n    out,\n    workerUrl:new URL('./src/actor-worker.js',location.href),\n  });\n  try {\n    const ref=host.spawn(0),sibling=host.spawn(0);\n    let epoch=0;\n    for(let i=0;i<8;i++) {\n      host.send(ref,BigInt(10000+i));\n      await new Promise(resolve=>setTimeout(resolve,55));\n      if(host.restart(ref)!==ref) throw Error('ActorRef changed after restart');\n      epoch++;\n    }\n    host.send(ref,42n);\n    host.send(sibling,99n);\n    const fault=await host.drain();\n    return {fault,stdout:out.text,count:host.count,epochs:epoch,truncated:out.truncated};\n  } finally {host.close();}\n})()");
+  assert.equal(browserRestart.fault,null,'real Worker restart must complete without stale fault');
+  assert.equal(browserRestart.epochs,8);
+  assert.equal(browserRestart.count,2);
+  assert.equal(browserRestart.truncated,false);
+  assert.deepEqual(browserRestart.stdout.trim().split('\n').sort(),['42','99'],
+    'only newest actor and healthy sibling may produce output after restart');
+  ok('real Chromium: eight suspended actor restart epochs fence stale stdout and preserve sibling');
+
+
   const staleHandler = `define actor Long as
   suspends receive(ActorMail<int> mail): void {
     await rt.sleep(1000);

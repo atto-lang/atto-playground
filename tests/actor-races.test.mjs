@@ -102,7 +102,7 @@ test('many cancellation/ACK orderings do not resurrect a closed epoch',async()=>
     const ref=host.spawn(0),worker=ManualWorker.instances[0];
     host.send(ref,BigInt(iteration));
     const pending=host.drain();
-    worker.emit({kind:'ready',generation:worker.epoch-1});
+    worker.emit({kind:'ready',generation:worker.epoch+1});
     if(iteration%3===0){
       host.close();
       worker.emit({kind:'ready',generation:worker.epoch});
@@ -111,7 +111,7 @@ test('many cancellation/ACK orderings do not resurrect a closed epoch',async()=>
       assert.equal(out.text,'');
     }else{
       worker.emit({kind:'ready',generation:worker.epoch});
-      worker.emit({kind:'done',generation:worker.epoch-1,sequence:0,stdout:'STALE'});
+      worker.emit({kind:'done',generation:worker.epoch+1,sequence:0,stdout:'STALE'});
       worker.emit({kind:'done',generation:worker.epoch,sequence:0,stdout:'ok'});
       assert.equal(await pending,null);
       assert.equal(out.text,'ok');
@@ -122,4 +122,51 @@ test('many cancellation/ACK orderings do not resurrect a closed epoch',async()=>
     host.close();
     assert.equal(worker.terminations,1);
   }
+});
+
+test('malformed generation frames quarantine failing actor and preserve healthy sibling',async()=>{
+  const invalid=[
+    null, undefined, {}, {kind:'ready'}, {kind:'ready',generation:null},
+    {kind:'ready',generation:0}, {kind:'ready',generation:-1},
+    {kind:'ready',generation:1.5}, {kind:'ready',generation:'1'},
+    {kind:'ready',generation:NaN}, {kind:'ready',generation:Infinity},
+    {kind:'done',generation:false,sequence:0,stdout:'POISON\\n'},
+  ];
+  for(const [i,frame] of invalid.entries()){
+    ManualWorker.instances=[];
+    const {host,out}=harness(ManualWorker,['Broken','Healthy']);
+    const bad=host.spawn(0),good=host.spawn(1);
+    const [wb,wg]=ManualWorker.instances;
+    host.send(bad,7n);host.send(good,42n);
+    const pending=host.drain();
+    wg.emit({kind:'ready',generation:wg.epoch});
+    wb.emit(frame);
+    assert.equal(wb.terminations,1,'invalid frame '+i+' must immediately quarantine');
+    assert.equal(wg.terminations,0,'healthy sibling must continue');
+    wb.emit({kind:'ready',generation:wb.epoch});
+    wb.emit({kind:'done',generation:wb.epoch,sequence:0,stdout:'POISON\\n'});
+    wg.emit({kind:'done',generation:wg.epoch,sequence:0,stdout:'42\\n'});
+    assert.match(await pending,/E_ACTOR_PROTOCOL: missing or invalid generation in actor Broken#0/);
+    assert.equal(out.text,'42\\n');
+    host.close();host.close();
+    assert.equal(wb.terminations,1,'once-only termination');
+    assert.equal(wg.terminations,1);
+  }
+});
+
+test('well-formed stale epoch message is ignored before the current generation handshake',async()=>{
+  ManualWorker.instances=[];
+  const {host,out}=harness(ManualWorker);
+  const a=host.spawn(0),w=ManualWorker.instances[0];
+  host.send(a,42n);
+  const p=host.drain();
+  w.emit({kind:'ready',generation:w.epoch+1});
+  w.emit({kind:'done',generation:w.epoch+1,sequence:0,stdout:'POISON\\n'});
+  w.emit({kind:'ready',generation:w.epoch});
+  w.emit({kind:'done',generation:w.epoch,sequence:0,stdout:'42\\n'});
+  assert.equal(await p,null);
+  assert.equal(out.text,'42\\n');
+  assert.equal(w.terminations,0);
+  host.close();
+  assert.equal(w.terminations,1);
 });
