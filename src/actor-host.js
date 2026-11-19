@@ -24,7 +24,17 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function fail(a, message) {
     if (a.failed) return;
     a.failed = true; // terminal for this actor generation only
-    if (!fault) fault = `${message} in actor ${label(a)}`;
+    a.failureMessage = `${message} in actor ${label(a)}`;
+    if (!fault) fault = a.failureMessage;
+    // Quarantine must end the failing actor's actual Worker immediately:
+    // ignoring its ACKs is insufficient if it keeps consuming CPU.
+    // Do not terminate healthy siblings, and never double-terminate on close.
+    const worker = a.worker;
+    a.worker = null;
+    if (worker) {
+      worker.onmessage = worker.onerror = worker.onmessageerror = null;
+      worker.terminate();
+    }
     // Healthy siblings retain their own Workers/mailboxes and are drained
     // before reporting a failure. A failed actor must not block their progress.
     check();
@@ -85,20 +95,81 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     fail(a, 'E_ACTOR_PROTOCOL: unexpected actor worker message');
   }
 
+  // A worker callback is valid only for the very Worker object and epoch
+  // that registered it. Generation checks on the message payload alone are
+  // insufficient: late onerror/onmessageerror callbacks have no payload.
+  function launch(a) {
+    const generation = a.generation;
+    const worker = new WorkerImpl(workerUrl, { type: 'module' });
+    a.worker = worker;
+    const current = () => !closed && a.worker === worker && a.generation === generation;
+    worker.onmessage = event => {
+      if (current()) onMessage(a, event.data);
+    };
+    worker.onerror = event => {
+      event?.preventDefault?.();
+      if (current()) fail(a, 'E_ACTOR: worker failed to load or execute');
+    };
+    worker.onmessageerror = () => {
+      if (current()) fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
+    };
+    try {
+      // Every incarnation gets a freshly cloned module and private state.
+      worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm),
+        type: a.type, generation });
+    } catch (error) {
+      // Failed admission cannot leave an unowned Worker live.
+      a.worker = null;
+      worker.onmessage = worker.onerror = worker.onmessageerror = null;
+      worker.terminate();
+      throw error;
+    }
+  }
+
   function spawn(type) {
     if (closed) throw new Error('E_ACTOR: actor host closed');
     if (drainPromise) throw new Error('E_ACTOR: mailbox sealed for drain');
     if (!Number.isInteger(type) || type < 0 || type >= names.length) throw new Error('E_ACTOR: unknown actor type');
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
+    if (!Number.isSafeInteger(nextGeneration + 1)) throw Error('E_ACTOR_EPOCH: generation limit reached');
     const ref = actors.length;
-    const a = { ref, type, name: names[type], generation: nextGeneration++, ready: false, failed: false, sent: 0, done: 0, worker: null };
-    a.worker = new WorkerImpl(workerUrl, { type: 'module' });
-    a.worker.onmessage = event => onMessage(a, event.data);
-    a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
-    a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
-    // each actor gets a private copy of the module bytes
-    a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type, generation: a.generation });
+    const a = { ref, type, name: names[type], generation: nextGeneration++,
+      ready: false, failed: false, failureMessage: null, sent: 0, done: 0, worker: null };
+    launch(a);
     actors.push(a);
+    return ref;
+  }
+
+  /** Explicit supervisor-managed, volatile restart. The ActorRef is stable,
+   * but pending mail from the old generation is discarded (NOT durable replay).
+   * This is only permitted before the run seals its mailbox in drain().
+   * The new Worker has fresh Wasm globals, task scope and continuation frames.
+   * Browser Worker terminate fences callbacks; this is not persistent recovery.
+   */
+  function restart(ref) {
+    if (closed) throw Error('E_ACTOR: actor host closed');
+    if (drainPromise) throw Error('E_ACTOR: mailbox sealed for drain');
+    const a = Number.isInteger(ref) ? actors[ref] : undefined;
+    if (!a) throw Error('E_ACTOR: invalid actor reference');
+    if (!Number.isSafeInteger(nextGeneration + 1)) throw Error('E_ACTOR_EPOCH: generation limit reached');
+    const old = a.worker;
+    a.generation = nextGeneration++; // invalidate every old closure *first*
+    a.worker = null;
+    if (old) {
+      old.onmessage = old.onerror = old.onmessageerror = null;
+      old.terminate(); // stop old Wasm, timers, child tasks and mail queue
+    }
+    a.ready = false;
+    a.failed = false;
+    a.failureMessage = null;
+    a.sent = a.done = 0;
+    fault = actors.find(actor => actor.failed)?.failureMessage ?? null;
+    try {
+      launch(a);
+    } catch (error) {
+      fail(a, 'E_ACTOR_RESTART: worker launch failed');
+      throw error;
+    }
     return ref;
   }
 
@@ -131,10 +202,14 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (settle) { const resolve = settle; settle = null; resolve('E_ACTOR_CANCELLED: actor host closed'); }
     for (const a of actors) {
       a.generation++;
-      a.worker.onmessage = a.worker.onerror = a.worker.onmessageerror = null;
-      a.worker.terminate();
+      const worker = a.worker;
+      a.worker = null;
+      if (worker) {
+        worker.onmessage = worker.onerror = worker.onmessageerror = null;
+        worker.terminate();
+      }
     }
   }
 
-  return { spawn, send, drain, close, get count() { return actors.length; } };
+  return { spawn, restart, send, drain, close, get count() { return actors.length; } };
 }
