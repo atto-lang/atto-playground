@@ -135,7 +135,7 @@ test('job receive cannot run through the legacy untracked i64 entrypoint',async(
 });
 
 test('high-volume 1,000 real guest jobs ACK once without identity aliasing',async()=>{
-  const f=fixture(base('    job.ack();'));
+  const f=fixture(base('    stdio.println(job.job_id);\n    job.ack();'));
   const k=f.key(),ref=f.host.registry.register(k).ref;
   for(let i=0;i<1000;i++){
     assert.equal(f.host.jobs.dispatch_job({job_id:'batch:'+i,target:{kind:'actor',key:k},
@@ -146,6 +146,11 @@ test('high-volume 1,000 real guest jobs ACK once without identity aliasing',asyn
   for(let i=0;i<1000;i++){
     assert.deepEqual(f.host.jobs.inspect('tenant-a','batch:'+i),{status:'completed',ref});
   }
+  const lines=f.out.text.trimEnd().split('\n');
+  assert.equal(lines.length,1000,'every guest actually printed its own ID');
+  assert.equal(lines[0],'batch:0');
+  assert.equal(lines[999],'batch:999');
+  assert.equal(new Set(lines).size,1000,'no identity aliasing');
   assert.equal(f.host.stats.pendingMessages,0);
   f.host.close();
 });
