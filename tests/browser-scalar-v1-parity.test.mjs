@@ -1,5 +1,5 @@
 // Exact-source browser gate for the independently reviewed scalar/v1 corpus
-// in oreslang-source.js, oreslang-source.wasm and oreslang-source.net.
+// in atto-source.js, atto-source.wasm and atto-source.net.
 // This is a limited *shared scalar profile*, not full language/backend parity.
 // Every input is pinned to its canonical Git blob SHA-1; all successful guests
 // execute in a real WebAssembly VM. No generated JS evaluation or mock compiler.
@@ -158,7 +158,7 @@ const CHECKED_OVERFLOW = Object.freeze([
 
 for (const [name, expression] of CHECKED_OVERFLOW) {
   test('browser guest checked-i64 parity: '+name, async () => {
-    // Same boundary expressions as oreslang-source.js's checked-i64 profile.
+    // Same boundary expressions as atto-source.js's checked-i64 profile.
     // A wrapping result is NEVER interchangeable with E_PANIC.
     const source = 'pub fnc main(): int { return ' + expression + '; }';
     const compiled = compiler.compile(source);
