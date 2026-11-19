@@ -71,7 +71,7 @@ This is version negotiation and safety hardening, **not** an implementation of r
 
 - The runner worker acts as one disposable tenant Worker per execution. Every `spawn` creates a separate `WebAssembly.Instance` from the same compiled `WebAssembly.Module`. Actors have private globals and, when declared by the compiled module, separate private linear memories; no per-actor Worker is created.
 - `send` queues mail with sequence numbers from 0. The tenant runtime drains one message per actor per round-robin pass, preserving each actor's FIFO order and preventing one busy mailbox from starving other completed handlers.
-- Limits: 16 actors per run and 10,000 messages per actor (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`). Actors cannot spawn or send.
+- Limits: 16 actors per run, 10,000 messages admitted per actor, and 20,000 **pending messages across the entire tenant** (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`, `E_ACTOR_TOTAL_MAILBOX`). The global quota is reserved on enqueue and released upon delivery, trap-drop, or tenant close. Actors cannot spawn or send.
 - The run ends when `main` has returned and every mailbox has drained, which matches the Java reference. Output from different actors may interleave in any order.
 - A trapping actor is marked failed; the tenant continues draining healthy sibling actors, then reports the first fault as `E_RUNTIME` or `E_PANIC` with the actor identity. A non-returning guest call still blocks the tenant Worker until the outer deadline kills it.
 - Stop and the 3-second deadline terminate the runner worker, invalidating every actor instance and mailbox in that tenant.
@@ -85,6 +85,46 @@ The reviewed static Pages artifact must be built by `scripts/package-pages.mjs`.
 The Pages workflow is **not an auto-publisher**: deployment requires `workflow_dispatch` from `main`, affirmative binary-disclosure confirmation, and an administrator-managed GitHub Actions repository variable `ATTO_PUBLIC_COMPILER_SHA256` matching the workflow input, compiler receipt and actual bytes. It tests the actual staged site with Chromium before publishing. A green CI run alone does **not** imply permission to disclose compiler Wasm; independent review and GitHub Pages hosting eligibility are additional gates.
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v2` intentionally permits bounded stdout imports, memory for string literals and objects, and the bounded actor capabilities. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
+
+## Syntax previews (not part of the pinned compiler)
+
+The dropdown separates executable examples from **syntax previews**. These seven
+`.atto` files are educational design sketches, not proven compilable programs.
+The UI disables Run for the original preview text, and does not return a Wasm
+artifact. Editing a preview unlocks Run so the user can experiment with the
+real compiler; unsupported constructs still fail closed with an `E_*` diagnostic.
+
+| Preview | Demonstrates | Status |
+| --- | --- | --- |
+| `trap.atto` | Proposed explicit fatal trap; not interchangeable with `Err` | Keyword and fault boundary semantics need compiler/runtime specification |
+| `result-option.atto` | `Result<T,E>`, `Option<T>`, `Ok`, `Err`, `Some`, `None` | Generic ADTs and constructors not lowered |
+| `channel-bounded.atto` | Bounded mailbox capacity and suspending backpressure | Channel constructors and scheduler integration not lowered |
+| `channel-probe.atto` | `try readch` immediate probe vs `nb readch` future | Grammar has wait modes; browser compiler does not |
+| `channel-unbounded.atto` | Unbounded buffer, waiting receiver, quotas | Unbounded != infinite memory or nonblocking receive |
+| `rx-observable.atto` | Observable map/filter/take and subscription lifetime | Proposed `rx` stdlib API, not validated language ABI |
+| `rx-interop.atto` | Observable↔channel adapters, Task/Future, `suspends`/`await` | Proposed adapter names; cancellation, errors and ownership need specification |
+
+The reference grammar describes `readch`/`writech` as suspending,
+`nb` variants as future-returning, and `try` as immediate one-shot probes.
+Unbounded channel sends avoid waiting *for a fixed-capacity slot*, but receive
+can still suspend while empty; memory quotas and cancellation still apply.
+An Rx subscription must be explicitly cancelled/disposed. Observables are
+push streams, not directly awaitable: an adapter such as `first_task()` must
+bridge to a future and define completion, error and cancellation behavior.
+
+**Release gate:** do not relabel these samples executable until an approved,
+pinned compiler and browser runtime pass real guest execution tests. Packaging
+a text sample does not authorize publication of a new compiler binary.
+
+## Explicit trap panic code (future compiler compatibility)
+
+The guest contract reserves `panic_code=4` for an explicit, terminal
+`trap;` statement. The browser host renders this as
+`E_PANIC: explicit terminal trap`. A trap is not an `Err` value
+and does not become catchable through `Result`. This compatibility
+mapping does **not** imply the currently pinned public compiler can emit
+this code; the proposed compiler implementation requires its own
+review, native/Wasm tests, and authorized binary promotion.
 
 
 ## Tenant memory admission (v2)

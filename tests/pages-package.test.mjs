@@ -123,8 +123,23 @@ test('every local browser module import belongs to the published asset allowlist
   for (const essential of [
     'src/actor-abi-version.js',
     'src/tenant-actor-host.js',
+    'src/local-actor-registry.js',
+    'src/local-actor-groups.js',
     'src/wasm-memory-admission.js',
+    'src/guest-import-abi.js',
   ]) {
     assert.ok(assets.has(essential), essential + ' must ship with the actor runtime');
   }
+});
+
+test('packaged runner includes exact Wasm import ABI admission module', async t => {
+  const root = await fixture(t);
+  const manifest = await packagePages({ root, sourceSha: 'a'.repeat(40) });
+  assert.equal(PAGES_ASSETS.filter(x => x === 'src/guest-import-abi.js').length, 1);
+  assert.equal(manifest.assets['src/guest-import-abi.js']?.bytes > 0, true);
+  const staged = await readFile(join(root, '_site/src/guest-import-abi.js'));
+  const approved = await readFile(join(root, 'src/guest-import-abi.js'));
+  assert.deepEqual(staged, approved, 'packaging must preserve exact verifier bytes');
+  const runner = await readFile(new URL('../src/runner-worker.js', import.meta.url), 'utf8');
+  assert.match(runner, /from ['"]\.\/guest-import-abi\.js['"]/);
 });

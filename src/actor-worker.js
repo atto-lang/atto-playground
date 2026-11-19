@@ -26,9 +26,7 @@ async function handle(data) {
           source.byteLength > (1 << 20)) {
         throw new Error('E_GUEST_ABI: private bounded guest bytes required');
       }
-      // The child Worker must not trust that its sender validated or copied
-      // bytes, including when invoked directly outside the public UI.
-      const wasm = new Uint8Array(source);
+      const wasm = new Uint8Array(source); // child owns its exact validated bytes
       if (!WebAssembly.validate(wasm)) throw new Error('Invalid/oversized guest module');
       if (!Number.isInteger(data.type) || data.type < 0) throw new Error('Invalid actor type');
       admitWasm32Memory(wasm);

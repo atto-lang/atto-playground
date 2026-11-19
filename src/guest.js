@@ -1,7 +1,7 @@
 /** Host side of guest contract atto.browser.guest.v2 (see docs/COMPILER_CONTRACT.md). */
 export const STDOUT_LIMIT = 64 * 1024;
 const PRINT = new Set(['print_i64', 'print_bool', 'print_str', 'print_newline', 'print_f64']);
-const ACTOR = new Set(['actor_spawn', 'actor_send']);
+const ACTOR = new Set(['actor_spawn', 'actor_send', 'actor_get_or_create']);
 const ALLOWED_EXPORTS = new Set(['main', 'panic_code', 'memory', 'actor_init', 'actor_receive']);
 export const MAX_ACTOR_TYPES = 256;
 const ACTOR_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
@@ -96,6 +96,27 @@ export function guestImports(module, out, actors = null) {
   let memory = null;
   const write = text => appendCapped(out, text);
   const denied = () => { throw new Error('E_ACTOR: actors cannot spawn or send in this context'); };
+  const registryKey = descriptor => {
+    if (typeof descriptor !== 'bigint' || !(memory instanceof WebAssembly.Memory)) {
+      throw new Error('E_ACTOR_KEY: invalid guest string descriptor or memory');
+    }
+    // Rust/Wasm string ABI: high u32 is offset, low u32 is UTF-8 length.
+    const packed = BigInt.asUintN(64, descriptor);
+    const offset = Number(packed >> 32n);
+    const length = Number(packed & 0xffffffffn);
+    // Subtraction-based bounds avoid unsigned wrap and keep the decoder
+    // from reading the wrong region after guest memory growth.
+    const capacity = memory.buffer.byteLength;
+    if (length === 0 || length > 4096 || offset > capacity ||
+        length > capacity - offset) {
+      throw new Error('E_ACTOR_KEY: guest key out of bounds');
+    }
+    try {
+      return decoder.decode(new Uint8Array(memory.buffer, offset, length));
+    } catch {
+      throw new Error('E_ACTOR_KEY: malformed UTF-8');
+    }
+  };
 
   const atto = {
     print_i64: value => write(String(value)),
@@ -108,6 +129,10 @@ export function guestImports(module, out, actors = null) {
     print_f64: value => write(formatJavaDouble(value)),
     actor_spawn: actors ? type => actors.spawn(type) : denied,
     actor_send: actors ? (ref, value) => actors.send(ref, value) : denied,
+    actor_get_or_create: actors && typeof actors.getOrCreate === 'function'
+      ? (type, namespace, applicationKey) => actors.getOrCreate(
+          type, registryKey(namespace), registryKey(applicationKey))
+      : denied,
   };
   return { imports: { atto }, bind: instance => { memory = instance.exports.memory ?? null; } };
 }
