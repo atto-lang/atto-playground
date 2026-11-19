@@ -13,7 +13,7 @@
 import { createLocalActorRegistry } from './local-actor-registry.js';
 import { createLocalActorGroups, createLocalPubSub } from './local-actor-groups.js';
 import { createLocalActorJobRouter } from './local-actor-job-router.js';
-import { appendCapped, describePanic, guestImports } from './guest.js';
+import { appendCapped, describePanic, guestImports, jobActorModes } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
 
 const I64_MIN = -(1n << 63n);
@@ -22,12 +22,16 @@ const MAX_MEMORY_BYTES = 1 << 20;
 // Aggregate outstanding mail budget; scoped to the disposable tenant.
 export const MAX_TOTAL_PENDING_MESSAGES = 20_000;
 const YIELD_EVERY = 64;
+const JOB_METADATA_START = 65536, JOB_METADATA_END = 131072;
+const JOB_ID_LIMIT = 4096, JOB_CORR_LIMIT = 256;
+const encoder = new TextEncoder();
 
 export function createTenantActorHost({ module, names, out }) {
   if (!(module instanceof WebAssembly.Module)) throw new TypeError('compiled Wasm module required');
   if (!Array.isArray(names) || !names.length) throw new Error('actor table required');
   if (!out || typeof out.text !== 'string') throw new TypeError('stdout accumulator required');
 
+  const jobModes = jobActorModes(module, names);
   const actors = [];
   let fault = null;
   let closed = false;
@@ -50,6 +54,7 @@ export function createTenantActorHost({ module, names, out }) {
       fault = `${description} in actor ${label(a)}`;
     }
     a.failed = true;
+    a.activeJob=null;
     const lost = a.mailbox.length - a.head;
     pendingMessages -= lost;
     droppedMessages += lost;
@@ -84,11 +89,23 @@ export function createTenantActorHost({ module, names, out }) {
     const a = {
       ref: actors.length, type, name: names[type], instance: null,
       output: { text: '', truncated: false }, mailbox: [], head: 0,
-      sent: 0, failed: false
+      sent: 0, failed: false, jobMode: jobModes[type], activeJob: null,
+      jobCursor: JOB_METADATA_START
     };
     actors.push(a);
     try {
-      const host = guestImports(module, a.output);
+      const host = guestImports(module, a.output, {
+        jobAck(sequence, attempt) {
+          // This callback closes over ONE private actor instance. A guest
+          // integer is never sufficient to select an arbitrary actor/job.
+          const active = a.activeJob;
+          if (closed || a.failed || !active || !active.claim || active.acked ||
+              active.sequence !== sequence || active.attempt !== attempt) {
+            throw new Error('E_ACTOR_JOB_ACK: no matching in-flight actor job');
+          }
+          active.acked = true; // provisional; commit only after clean return
+        }
+      });
       a.instance = new WebAssembly.Instance(module, host.imports);
       host.bind(a.instance);
       if (typeof a.instance.exports.actor_init !== 'function' ||
@@ -96,6 +113,9 @@ export function createTenantActorHost({ module, names, out }) {
         throw new Error('E_ACTOR_PROTOCOL: actor exports missing');
       }
       checkMemory(a);
+      if (a.jobMode && typeof a.instance.exports.actor_receive_job !== 'function') {
+        throw new Error('E_ACTOR_JOB_ABI: job receiver export missing');
+      }
       a.instance.exports.actor_init(type);
       checkMemory(a);
       flush(a);
@@ -120,8 +140,11 @@ export function createTenantActorHost({ module, names, out }) {
     if (pendingMessages >= MAX_TOTAL_PENDING_MESSAGES) {
       throw new Error('E_ACTOR_TOTAL_MAILBOX: aggregate pending-message budget exceeded');
     }
-    if (mailbox_claim !== undefined) jobs.bind_mailbox(mailbox_claim, a.ref);
-    a.mailbox.push({ value, sequence: a.sent, mailbox_claim });
+    if (a.jobMode && mailbox_claim === undefined) {
+      throw new Error('E_ACTOR_JOB_REQUIRED: Job<int> requires a trusted job admission claim');
+    }
+    const job = mailbox_claim === undefined ? null : jobs.bind_mailbox(mailbox_claim, a.ref);
+    a.mailbox.push({ value, sequence: a.sent, mailbox_claim, job });
     a.sent++;
     pendingMessages++;
   }
@@ -136,6 +159,7 @@ export function createTenantActorHost({ module, names, out }) {
     if (closed || !actor) return false;
     const wasLive = !actor.failed && actor.instance !== null;
     actor.failed = true;
+    actor.activeJob=null;
     const lost = actor.mailbox.length - actor.head;
     pendingMessages -= lost;
     droppedMessages += lost;
@@ -149,6 +173,32 @@ export function createTenantActorHost({ module, names, out }) {
     actor.output.text = '';
     actor.output.truncated = false;
     return wasLive;
+  }
+
+  function writeJobMetadata(a, job) {
+    const memory=a.instance?.exports.memory;
+    if (!(memory instanceof WebAssembly.Memory) || memory.buffer.byteLength < JOB_METADATA_END) {
+      throw new Error('E_ACTOR_JOB_ABI: expected private reserved job metadata memory');
+    }
+    const id=encoder.encode(job.job_id), corr=encoder.encode(job.correlation_id);
+    if (!id.length || id.length>JOB_ID_LIMIT || !corr.length || corr.length>JOB_CORR_LIMIT ||
+        typeof job.attempt !== 'bigint' || job.attempt<0n || job.attempt>I64_MAX) {
+      throw new Error('E_ACTOR_JOB_ABI: invalid admitted job identity/attempt');
+    }
+    // Unique per-message addresses: a retained immutable job_id descriptor
+    // must NOT silently point at a later job's metadata. Quota is fail-closed.
+    const idStart=a.jobCursor;
+    const corrStart=idStart+id.length;
+    const end=corrStart+corr.length;
+    if (idStart<JOB_METADATA_START || end>JOB_METADATA_END) {
+      throw new Error('E_ACTOR_JOB_METADATA_FULL: per-actor immutable job memory exhausted');
+    }
+    const bytes=new Uint8Array(memory.buffer);
+    bytes.set(id,idStart);
+    bytes.set(corr,corrStart);
+    a.jobCursor=end;
+    return [(BigInt(idStart)<<32n)|BigInt(id.length),
+      (BigInt(corrStart)<<32n)|BigInt(corr.length)];
   }
 
   /** Round-robin, one mailbox entry per actor per sweep. This yields the JS
@@ -172,7 +222,7 @@ export function createTenantActorHost({ module, names, out }) {
           if (a.failed || a.head >= a.mailbox.length) continue;
           progressed = true;
           const offset = a.head++;
-          const { value, sequence, mailbox_claim } = a.mailbox[offset];
+          const { value, sequence, mailbox_claim, job } = a.mailbox[offset];
           a.mailbox[offset] = null; // never retain delivered guest values
           pendingMessages--;
           if (a.head === a.mailbox.length) {
@@ -181,17 +231,31 @@ export function createTenantActorHost({ module, names, out }) {
           }
           try {
             if (mailbox_claim) jobs.observe_job(mailbox_claim, a.ref, 'started');
-            a.instance.exports.actor_receive(a.type, value, BigInt(sequence));
+            if (a.jobMode) {
+              if (!job) throw new Error('E_ACTOR_JOB_REQUIRED: missing admitted job metadata');
+              const [id,corr]=writeJobMetadata(a,job);
+              a.activeJob={claim:mailbox_claim,sequence:BigInt(sequence),
+                attempt:job.attempt,acked:false};
+              a.instance.exports.actor_receive_job(a.type,value,BigInt(sequence),id,job.attempt,corr);
+            } else {
+              a.instance.exports.actor_receive(a.type, value, BigInt(sequence));
+            }
             checkMemory(a);
             flush(a);
-            if (mailbox_claim) jobs.observe_job(mailbox_claim, a.ref, 'returned');
+            if (mailbox_claim) {
+              jobs.observe_job(mailbox_claim, a.ref, 'returned');
+              if (a.jobMode && a.activeJob.acked)
+                jobs.observe_job(mailbox_claim, a.ref, 'acknowledged');
+            }
           } catch (error) {
             // A trap may occur after side effects. The job must remain
             // indeterminate, while healthy actors continue draining.
             if (mailbox_claim) jobs.observe_job(mailbox_claim, a.ref, 'lost');
+            a.activeJob=null;
             failed(a, error);
             continue;
           }
+          a.activeJob=null;
           if (++steps % YIELD_EVERY === 0) {
             await new Promise(resolve => setTimeout(resolve, 0));
             if (closed) return 'E_ACTOR: tenant closed';

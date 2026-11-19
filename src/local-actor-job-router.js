@@ -73,7 +73,8 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
     if (closed) throw new Error('E_ACTOR_JOB_CLOSED: router closed');
   }
 
-  function dispatch_job({ job_id, target, value } = {}) {
+  function dispatch_job({ job_id, target, value, attempt = 0n,
+    correlation_id = 'local' } = {}) {
     checked_open();
     if (busy) throw new Error('E_ACTOR_JOB_REENTRANT: recursive job dispatch');
     const dest = target_spec(target);
@@ -84,10 +85,18 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
     if (typeof value !== 'bigint' || value < I64_MIN || value > I64_MAX) {
       throw new TypeError('E_ACTOR_JOB_PAYLOAD: current guest ABI requires signed i64');
     }
+    if (typeof attempt !== 'bigint' || attempt < 0n || attempt > I64_MAX) {
+      throw new TypeError('E_ACTOR_JOB_ATTEMPT: attempt must be nonnegative signed i64');
+    }
+    const correlation = text(correlation_id, 'correlation_id');
+    if (utf8.encode(correlation).length > 256) {
+      throw new TypeError('E_ACTOR_JOB_KEY: correlation_id exceeds 256 UTF-8 bytes');
+    }
     const identity = JSON.stringify([dest.namespace, id]);
     const previous = receipts.get(identity);
     if (previous) {
-      if (previous.fingerprint !== dest.fingerprint || previous.value !== value) {
+      if (previous.fingerprint !== dest.fingerprint || previous.value !== value ||
+          previous.attempt !== attempt || previous.correlation_id !== correlation) {
         throw new Error('E_ACTOR_JOB_CONFLICT: job ID already assigned a different target or payload');
       }
       if (previous.state === 'indeterminate') {
@@ -104,7 +113,9 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
     try {
       let ref, empty = false;
       const pending = { state: 'preparing', fingerprint: dest.fingerprint,
-        value, ref: null, slot: null, claim: Object.freeze({}) };
+        value, namespace: dest.namespace, job_id: id, attempt,
+        correlation_id: correlation, ref: null, slot: null,
+        claim: Object.freeze({}) };
       claims.set(pending.claim, pending);
       if (dest.kind === 'actor') {
         ref = registry.lookup(dest.key);
@@ -153,6 +164,8 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
       throw new Error('E_ACTOR_JOB_CLAIM: unknown, duplicate or invalid mailbox claim');
     }
     record.slot = slot;
+    return Object.freeze({namespace: record.namespace, job_id: record.job_id,
+      attempt: record.attempt, correlation_id: record.correlation_id});
   }
 
   /** Host observation after a real Wasm receive call, NOT a guest ACK.
@@ -169,6 +182,8 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
       record.state = 'observed_started';
     } else if (event === 'returned' && record.state === 'observed_started') {
       record.state = 'observed_executed';
+    } else if (event === 'acknowledged' && record.state === 'observed_executed') {
+      record.state = 'completed'; // guest ACK + clean Wasm return, volatile only
     } else if (event === 'lost' &&
         (record.state === 'admitted' || record.state === 'observed_started' ||
          record.state === 'indeterminate' || record.state === 'preparing')) {
