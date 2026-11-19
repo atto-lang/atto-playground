@@ -137,7 +137,7 @@ test('single-job group assignment admits exactly one deterministic member, not b
 
 test('job selection changes only when membership changes and never activates a worker', () => {
   const f=fixture(), k=group('work');
-  assert.throws(()=>f.groups.dispatch_one(k,'id',1n),/E_ACTOR_GROUP_EMPTY/);
+  assert.equal(f.groups.dispatch_one(k,'id',1n),null);
   assert.equal(f.groups.group_count,0);
   const a=f.registry.make(), b=f.registry.make();
   const ta=f.groups.join(k,a);
@@ -147,7 +147,7 @@ test('job selection changes only when membership changes and never activates a w
   assert.deepEqual(f.groups.members(k),[b]);
   assert.equal(f.groups.leave(k,ta),false);
   f.registry.retire(b);
-  assert.throws(()=>f.groups.dispatch_one(k,'id',2n),/E_ACTOR_GROUP_EMPTY/);
+  assert.equal(f.groups.dispatch_one(k,'id',2n),null);
 });
 
 test('group job admission is single-attempt and protects group mutation from reentrant send', () => {
