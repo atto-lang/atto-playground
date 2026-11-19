@@ -22,8 +22,8 @@ const MAX_MEMORY_BYTES = 1 << 20;
 // Aggregate outstanding mail budget; scoped to the disposable tenant.
 export const MAX_TOTAL_PENDING_MESSAGES = 20_000;
 const YIELD_EVERY = 64;
-const JOB_ID_OFFSET = 57344, JOB_ID_LIMIT = 4096;
-const JOB_CORR_OFFSET = 61440, JOB_CORR_LIMIT = 256;
+const JOB_METADATA_START = 65536, JOB_METADATA_END = 131072;
+const JOB_ID_LIMIT = 4096, JOB_CORR_LIMIT = 256;
 const encoder = new TextEncoder();
 
 export function createTenantActorHost({ module, names, out }) {
@@ -89,7 +89,8 @@ export function createTenantActorHost({ module, names, out }) {
     const a = {
       ref: actors.length, type, name: names[type], instance: null,
       output: { text: '', truncated: false }, mailbox: [], head: 0,
-      sent: 0, failed: false, jobMode: jobModes[type], activeJob: null
+      sent: 0, failed: false, jobMode: jobModes[type], activeJob: null,
+      jobCursor: JOB_METADATA_START
     };
     actors.push(a);
     try {
@@ -176,21 +177,28 @@ export function createTenantActorHost({ module, names, out }) {
 
   function writeJobMetadata(a, job) {
     const memory=a.instance?.exports.memory;
-    if (!(memory instanceof WebAssembly.Memory) || memory.buffer.byteLength < 65536) {
-      throw new Error('E_ACTOR_JOB_ABI: expected a private 64 KiB guest memory');
+    if (!(memory instanceof WebAssembly.Memory) || memory.buffer.byteLength < JOB_METADATA_END) {
+      throw new Error('E_ACTOR_JOB_ABI: expected private reserved job metadata memory');
     }
     const id=encoder.encode(job.job_id), corr=encoder.encode(job.correlation_id);
     if (!id.length || id.length>JOB_ID_LIMIT || !corr.length || corr.length>JOB_CORR_LIMIT ||
         typeof job.attempt !== 'bigint' || job.attempt<0n || job.attempt>I64_MAX) {
       throw new Error('E_ACTOR_JOB_ABI: invalid admitted job identity/attempt');
     }
+    // Unique per-message addresses: a retained immutable job_id descriptor
+    // must NOT silently point at a later job's metadata. Quota is fail-closed.
+    const idStart=a.jobCursor;
+    const corrStart=idStart+id.length;
+    const end=corrStart+corr.length;
+    if (idStart<JOB_METADATA_START || end>JOB_METADATA_END) {
+      throw new Error('E_ACTOR_JOB_METADATA_FULL: per-actor immutable job memory exhausted');
+    }
     const bytes=new Uint8Array(memory.buffer);
-    bytes.fill(0,JOB_ID_OFFSET,JOB_ID_OFFSET+JOB_ID_LIMIT);
-    bytes.fill(0,JOB_CORR_OFFSET,JOB_CORR_OFFSET+JOB_CORR_LIMIT);
-    bytes.set(id,JOB_ID_OFFSET);
-    bytes.set(corr,JOB_CORR_OFFSET);
-    return [(BigInt(JOB_ID_OFFSET)<<32n)|BigInt(id.length),
-      (BigInt(JOB_CORR_OFFSET)<<32n)|BigInt(corr.length)];
+    bytes.set(id,idStart);
+    bytes.set(corr,corrStart);
+    a.jobCursor=end;
+    return [(BigInt(idStart)<<32n)|BigInt(id.length),
+      (BigInt(corrStart)<<32n)|BigInt(corr.length)];
   }
 
   /** Round-robin, one mailbox entry per actor per sweep. This yields the JS
