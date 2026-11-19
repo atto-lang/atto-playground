@@ -4,8 +4,8 @@ import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {FORMATTER_SHA256,FORMATTER_BYTES,FORMATTER_SOURCE_COMMIT} from '../src/formatter-pin.js';
 import {formatWithWasm,mapFormatCaret} from '../src/formatter-runtime.js';
-const wasm=await readFile(new URL('../public/oreslang_format.wasm',import.meta.url));
-const receipt=JSON.parse(await readFile(new URL('../public/oreslang_format.receipt.json',import.meta.url),'utf8'));
+const wasm=await readFile(new URL('../public/atto_format.wasm',import.meta.url));
+const receipt=JSON.parse(await readFile(new URL('../public/atto_format.receipt.json',import.meta.url),'utf8'));
 test('real canonical formatter Wasm is exact SHA/size-pinned and import-free',()=>{
   assert.equal(wasm.length,FORMATTER_BYTES);
   assert.equal(createHash('sha256').update(wasm).digest('hex'),FORMATTER_SHA256);

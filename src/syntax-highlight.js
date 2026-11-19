@@ -1,5 +1,5 @@
 /** Cosmetic tokenizer: follows comment/string boundaries and keywords from
- * ores-truffle-oreslang/oreslang-format (src/lib.rs, keyword_blocks.rs).
+ * atto-lang/atto-format (src/lib.rs, keyword_blocks.rs).
  * Only the actual compiler validates syntax; this never evaluates source.
  */
 const KEYWORDS = new Set(('pub private define fnc routine class actor module struct trait interface ' +
