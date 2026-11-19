@@ -114,7 +114,7 @@ test('shutdown during send invalidates the reservation and never reports success
 
 test('invalid payload, key, capacity, and conflicting receipts are fail-atomic',()=>{
   const f=fixture(1);f.attach();
-  for(const job_id of ['', '\\uD800', 'a'.repeat(4097)]) {
+  for(const job_id of ['', '\uD800', 'a'.repeat(4097)]) {
     assert.throws(()=>f.router.dispatch_job({job_id,target:actor(),value:1n}), /E_ACTOR_JOB_KEY/);
   }
   for(const value of [1,1.2,(1n<<63n),-(1n<<63n)-1n]) {
