@@ -188,7 +188,7 @@ export function createLocalActorGroups({registry, max_groups = 128,
     return hash;
   }
 
-  function dispatch_one(group, job_id, payload) {
+  function dispatch_one(group, job_id, payload, mailbox_claim = undefined) {
     return run(() => {
       if (typeof payload !== 'bigint' || payload < I64_MIN || payload > I64_MAX) {
         throw new TypeError('E_ACTOR_GROUP_PAYLOAD: current guest ABI requires signed i64');
@@ -221,7 +221,7 @@ export function createLocalActorGroups({registry, max_groups = 128,
       try {
         // This send is the mailbox-admission linearization point. Never
         // retry a different member on error: admission may have happened.
-        registry.send(selected, payload);
+        registry.send(selected, payload, mailbox_claim);
       } catch (error) {
         if (/^E_ACTOR_REF_STALE:/.test(error?.message ?? '')) {
           const now = groups.get(key);
