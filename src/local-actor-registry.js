@@ -207,7 +207,7 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     return target.slot;
   }
 
-  function send_to(ref, value) {
+  function send_to(ref, value, mailbox_claim = undefined) {
     checkedOpen();
     const target = ref && typeof ref === 'object' ? physical.get(ref) : null;
     if (!target || target.epoch !== epoch) {
@@ -224,7 +224,7 @@ export function createLocalActorRegistry({ names, spawn, send, isLive, retire })
     }
     // Host send() is the admission linearization point, not the lookup.
     // A successful return never asserts a completed or durable delivery.
-    send(target.slot, value);
+    send(target.slot, value, mailbox_claim);
   }
 
   function close() {
