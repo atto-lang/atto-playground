@@ -122,3 +122,55 @@ test('registry liveness unexpected error is not misreported as actor exit',()=>{
   assert.throws(()=>g.join(group(),a),/host I\/O fault/);
   assert.equal(g.membership_count,0);
 });
+
+test('single-job group assignment admits exactly one deterministic member, not broadcast', () => {
+  const f=fixture(), k=group('work'), a=f.registry.make(), b=f.registry.make(), c=f.registry.make();
+  f.groups.join(k,a); f.groups.join(k,b); f.groups.join(k,c);
+  const chosen=f.groups.dispatch_one(k,'job-1',10n).ref;
+  assert.ok([a,b,c].includes(chosen));
+  for(let i=0;i<8;i++) assert.equal(f.groups.dispatch_one(k,'job-1',11n).ref,chosen);
+  assert.equal(f.deliveries.length,9);
+  // Rejoining the same ref changes no membership, and selection is order-independent.
+  assert.equal(f.groups.dispatch_one(k,'job-1',12n).ref,chosen);
+  assert.equal(f.deliveries.length,10);
+});
+
+test('job selection changes only when membership changes and never activates a worker', () => {
+  const f=fixture(), k=group('work');
+  assert.throws(()=>f.groups.dispatch_one(k,'id',1n),/E_ACTOR_GROUP_EMPTY/);
+  assert.equal(f.groups.group_count,0);
+  const a=f.registry.make(), b=f.registry.make();
+  const ta=f.groups.join(k,a);
+  f.groups.join(k,b);
+  f.registry.retire(a);
+  assert.equal(f.groups.dispatch_one(k,'id',2n).ref,b);
+  assert.deepEqual(f.groups.members(k),[b]);
+  assert.equal(f.groups.leave(k,ta),false);
+  f.registry.retire(b);
+  assert.throws(()=>f.groups.dispatch_one(k,'id',2n),/E_ACTOR_GROUP_EMPTY/);
+});
+
+test('group job admission is single-attempt and protects group mutation from reentrant send', () => {
+  const f=fixture(), k=group('work'), a=f.registry.make(), b=f.registry.make();
+  f.groups.join(k,a); f.groups.join(k,b);
+  let attempts=0;
+  f.registry.send=(ref,value)=>{
+    attempts++;
+    assert.throws(()=>f.groups.leave(k,{}),/E_ACTOR_GROUP_REENTRANT/);
+    throw Error('injected failure after admission');
+  };
+  assert.throws(()=>f.groups.dispatch_one(k,'id',5n),/injected failure/);
+  assert.equal(attempts,1,'never retry on another member after ambiguous send');
+});
+
+test('group job IDs and payloads are checked before any mailbox admission', () => {
+  const f=fixture(), k=group(), a=f.registry.make();
+  f.groups.join(k,a);
+  for(const id of ['', '\uD800', 'a'.repeat(4097)]) {
+    assert.throws(()=>f.groups.dispatch_one(k,id,1n),/E_ACTOR_GROUP_KEY/);
+  }
+  for(const payload of [0, 2n**63n, -(2n**63n)-1n]) {
+    assert.throws(()=>f.groups.dispatch_one(k,'job',payload),/E_ACTOR_GROUP_PAYLOAD/);
+  }
+  assert.deepEqual(f.deliveries,[]);
+});
