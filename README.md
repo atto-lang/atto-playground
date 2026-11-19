@@ -48,3 +48,23 @@ The highlighting mirror uses conservative token classes based on the Oreslang fo
 ## Canonical browser formatter
 
 The **Format** and **Check format** actions run the real Rust `oreslang-format` library compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+
+### Ownership-language boundary for actor runtime integration
+
+AttoLang's ordinary nonprimitive argument may omit `borrow!`; the callee
+gets a temporary readonly loan, not a movable or shareable object.
+`borrow! owner` is the explicit equivalent where that compiler profile
+is available, and `mut owner`/`borrow! mut owner` require an exclusive
+loan. None of these source spellings is automatically implemented merely
+by this playground's JavaScript Worker message transport.
+
+A future compiler/host adapter must authenticate `take!` before consuming
+an actor-owned message graph, `copy!!` before independently cloning mutable
+reachable objects, and `share!` before exposing proven frozen/guarded
+shared ownership. `copy!` is shallow and cannot replace actor isolation.
+`pin! take!` demands stable pointee storage across any handoff, while
+`drop!` must not destroy memory still referenced by pending workers.
+These are explicit **admission and negative-test requirements**, not claims
+that this integration PR compiles or executes those operators. Preserve the
+existing generation fences, CONTROL ordering, and shutdown cleanup tests.
+
