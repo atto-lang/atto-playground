@@ -140,3 +140,25 @@ test('randomized consumed Future cancellation keeps task quota and settles once'
     assert.throws(()=>host.imports.task_start(0),/scope closed/);
   });
 });
+
+// Integration of #55 concurrent-yield regressions. The #53/#54 runtime
+// separates pending reservations from *completed* cooperative yield metrics.
+test('parallel cooperative await admission cannot oversubscribe the yield quota',async()=>{
+  const host=bind({maxYields:1});
+  const accepted=host.imports.cooperate();
+  const rejected=host.imports.cooperate();
+  await assert.rejects(rejected,/yield quota exhausted/);
+  assert.equal(host.cooperativeYields,0,'in-flight yield is reserved, not yet completed');
+  await accepted;
+  assert.equal(host.cooperativeYields,1);
+  host.close();
+});
+
+test('cancellation invalidates an already-admitted cooperative suspension',async()=>{
+  const host=bind({maxYields:1});
+  const pending=host.imports.cooperate();
+  host.close();
+  await assert.rejects(pending,/scope closed|stale cooperative continuation/);
+  assert.equal(host.cooperativeYields,0,'cancelled yield must not count as a completed turn');
+  await assert.rejects(host.imports.cooperate(),/scope closed/);
+});
