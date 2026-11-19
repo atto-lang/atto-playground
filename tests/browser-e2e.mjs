@@ -286,15 +286,17 @@ try {
   await js("document.querySelector('#diagnostics button').click()");
   assert.equal(await js("document.activeElement?.id"),'source');
   ok('compiler errors switch to Diagnostics and jump to the native editor');
-  await source('define class Point as\nend\npub fnc main(): int { return 42; }');
-  s=await run('error', "top-level 'define'");
-  assert.match(s.diagnostics, /deployed compiler does not support top-level define/);
+  // The pinned compiler now supports ordinary 'define class'. Use a
+  // genuinely unsupported abstract class to preserve the fail-closed gate.
+  await source('define abstract class Point as\nend\npub fnc main(): int { return 42; }');
+  s=await run('error', 'E_UNSUPPORTED');
+  assert.match(s.diagnostics, /E_UNSUPPORTED/);
   assert.equal(s.bytes, '—');
   assert.equal(s.downloadDisabled, true);
-  assert.equal(await js("document.querySelector('#status').textContent"), 'Compiler feature unavailable');
+  assert.equal(await js("document.querySelector('#status').textContent"), 'Compiler error');
   await source('pub fnc main(): int { return 42; }');
   await run('success', 'main() → 42');
-  ok('unsupported define reports compiler limitation with no artifact, then real Wasm recovers');
+  ok('unsupported abstract class yields no artifact, then real Wasm recovers');
   await source('fnc main() -> int { return 2 + ; }');
   s=await run('error','E_SYNTAX');
   assert.equal(s.downloadDisabled,true);
