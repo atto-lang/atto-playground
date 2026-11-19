@@ -52,7 +52,10 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
-  const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
+  const rootNames = (await readdir(dir)).filter(n => n.endsWith('.atto'));
+  const previewNames = (await readdir(new URL('preview/', dir)))
+    .filter(n => n.endsWith('.atto')).map(n => 'preview/' + n);
+  const names = [...rootNames, ...previewNames].sort();
   assert.deepEqual(names, EXAMPLES.map(id => id + '.atto').sort());
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
@@ -225,8 +228,13 @@ test('pinned compiler rejects all syntax previews without an executable artifact
   }
 });
 
-test('explicit trap panic code is reported as terminal, never an Err value', () => {
-  const instance = { exports: { panic_code: { value: 4 } } };
-  assert.equal(describePanic(instance, new WebAssembly.RuntimeError('unreachable')),
-    'E_PANIC: explicit terminal trap');
+test('generator and recursion panic codes are terminal, never Err values', () => {
+  for (const [code, message] of [
+    [4, 'E_PANIC: invalid generator handle or state'],
+    [5, 'E_PANIC: generator step budget exhausted (a pull ran too long without yielding)'],
+    [6, 'E_PANIC: stack overflow (more than 1024 nested recursive calls)']
+  ]) {
+    const instance = { exports: { panic_code: { value: code } } };
+    assert.equal(describePanic(instance, new WebAssembly.RuntimeError('unreachable')), message);
+  }
 });
