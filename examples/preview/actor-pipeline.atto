@@ -1,0 +1,25 @@
+// SYNTAX PREVIEW ONLY: actor pipeline uses the pipe keyword, distinct from boolean operators and function '|>'.
+// A message passes through 3 actor mailboxes with bounded backpressure.
+define actor Parse as
+  receive(ActorMail<int> mail): void {
+    emit(mail.value + 1);
+  }
+end
+
+define actor Validate as
+  receive(ActorMail<int> mail): void {
+    if mail.value > 0 then emit(mail.value); fi
+  }
+end
+
+define actor Sink as
+  receive(ActorMail<int> mail): void {
+    stdio.println(mail.value);
+  }
+end
+
+pub fnc main(): int {
+  val pipeline = spawn Parse() pipe spawn Validate() pipe spawn Sink();
+  pipeline.send(41); // Sink receives 42, in FIFO order.
+  return 0;
+}

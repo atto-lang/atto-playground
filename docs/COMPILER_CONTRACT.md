@@ -132,3 +132,9 @@ review, native/Wasm tests, and authorized binary promotion.
 `src/wasm-memory-admission.js` parses the verified guest Wasm bytes **before** the first guest instance is constructed. The tenant runner rejects memory64, shared, unbounded and multiple memories, malformed declarations and declared Wasm32 maxima exceeding **16 × 64 KiB pages (1 MiB)**. This matches the pinned v2 class/string heap budget; it is not a configurable actor arena.
 
 Every actor is still a separate Wasm instance with separate globals. A legacy scalar-only actor guest may have **no linear memory at all** until `atto-source.rs#61` is rebuilt and vendored through the compiler receipt gate; the planned updated emitter exports one bounded 64 KiB memory for those actors. There is no compiler-managed suspended stack, actor-local preemption or general `await` support in v2. On a non-yielding Wasm call, only the parent deadline can terminate the entire worker.
+
+## Additional language-design previews
+
+The ten examples under `examples/preview/` are intentionally **source-only language previews**; the currently pinned browser compiler does not promise support for their syntax. The dropdown labels them as previews, and loading an untouched preview disables Run and formatting without creating any guest Wasm. Editing a preview explicitly opts into an ordinary compile attempt, which must still fail closed for unsupported syntax.
+
+For new source, boolean operators are proposed as `&&`, `||`, `^^`; the pinned compiler's legacy conditional comma and single pipe are compatibility syntax only. `And(a,b)`, `Or(a,b)`, and `Xor(a,b)` remain callable builtins. The actor pipeline preview uses the distinct `pipe` keyword, while ordinary functional pipelines use `|>`. Primitive value comparisons use `eq`, not reference-identity `==`.

@@ -17,7 +17,7 @@ test('dropdown, catalog and release allowlist agree on every example', async () 
   }
   assert.ok(PAGES_ASSETS.includes('src/example-catalog.js'));
   assert.equal(EXECUTABLE_EXAMPLES.length, 12);
-  assert.equal(PREVIEW_EXAMPLES.length, 7);
+  assert.equal(PREVIEW_EXAMPLES.length, 17);
   for (const id of PREVIEW_EXAMPLES) {
     assert.ok(isPreviewExample(id));
     assert.match(html, new RegExp('<option value="' + id + '">[^<]*\\(preview\\)</option>'));
@@ -40,4 +40,12 @@ test('preview sources explicitly distinguish traps, result errors, and waiting m
   assert.match(await src('rx-interop'), /\.first_task\(/);
   assert.match(await src('rx-interop'), /\bawait\b/);
   assert.match(await src('rx-interop'), /\bfrom_channel\b/);
+});
+
+test('new actor pipes and value equality stay distinct from boolean and reference operators', async () => {
+  const pipeline = await readFile(new URL('../examples/preview/actor-pipeline.atto', import.meta.url), 'utf8');
+  const match = await readFile(new URL('../examples/preview/match-types-is.atto', import.meta.url), 'utf8');
+  assert.match(pipeline, /spawn Parse\(\) pipe spawn Validate\(\) pipe spawn Sink\(\)/);
+  assert.doesNotMatch(pipeline, /spawn Parse\(\) \| spawn Validate\(\)/);
+  assert.match(match, /value eq 42/);
 });

@@ -23,6 +23,7 @@ const summary = document.querySelector('#summary');
 const runButton = document.querySelector('#run');
 const stopButton = document.querySelector('#stop');
 const selector = document.querySelector('#example');
+const supportLabel = document.querySelector('#example-support');
 let sampleLoading = false;
 const shareButton = document.querySelector('#share');
 const downloadButton = document.querySelector('#download');
@@ -98,6 +99,20 @@ function isUntouchedPreview() {
   return isPreviewExample(selector.value) && typeof samples[selector.value] === 'string' &&
     editor.value === samples[selector.value];
 }
+function updateExampleSupport() {
+  if (isPreviewExample(selector.value)) {
+    supportLabel.textContent = isUntouchedPreview()
+      ? 'Language preview — not executable by pinned compiler'
+      : 'Edited language preview — compilation support not guaranteed';
+    supportLabel.dataset.support = 'preview';
+  } else if (selector.value === 'custom:new' || selector.value.startsWith('saved:')) {
+    supportLabel.textContent = 'Custom source — compiler support depends on syntax';
+    supportLabel.dataset.support = 'custom';
+  } else {
+    supportLabel.textContent = 'Executable subset — pinned compiler';
+    supportLabel.dataset.support = 'runnable';
+  }
+}
 
 const splitter = document.querySelector('#splitter');
 const workbench = document.querySelector('.workbench');
@@ -152,8 +167,8 @@ function setRunning(value) {
   stopButton.disabled = !value;
   editor.readOnly = value;
   selector.disabled = value;
-  formatButton.disabled = value;
-  checkFormatButton.disabled = value;
+  formatButton.disabled = value || sampleLoading || isUntouchedPreview();
+  checkFormatButton.disabled = value || sampleLoading || isUntouchedPreview();
   if (value) status.textContent = 'Compiling';
   else if (status.textContent === 'Compiling' || status.textContent === 'Executing') status.textContent = 'Ready';
 }
@@ -208,7 +223,7 @@ async function run() {
  * Browser undo is preserved with native insertText where supported.
  */
 async function formatCode(checkOnly) {
-  if (working || formatting) return;
+  if (working || formatting || sampleLoading || isUntouchedPreview()) return;
   const before = editor.value, start = editor.selectionStart, end = editor.selectionEnd;
   formatting = true;
   formatButton.disabled = checkFormatButton.disabled = runButton.disabled = true;
@@ -263,7 +278,7 @@ async function formatCode(checkOnly) {
     editor.readOnly = working;
     selector.disabled = working;
     runButton.disabled = working || sampleLoading || isUntouchedPreview();
-    formatButton.disabled = checkFormatButton.disabled = working;
+    formatButton.disabled = checkFormatButton.disabled = working || sampleLoading || isUntouchedPreview();
   }
 }
 
@@ -310,6 +325,7 @@ function download() {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 function invalidateArtifact() {
+  updateExampleSupport();
   lastWasm = null;
   downloadButton.disabled = true;
   bytesLabel.textContent = '—';
@@ -318,6 +334,7 @@ function invalidateArtifact() {
   if (!working) {
     const preview = isUntouchedPreview();
     runButton.disabled = sampleLoading || preview;
+    formatButton.disabled = checkFormatButton.disabled = sampleLoading || preview;
     status.textContent = sampleLoading ? 'Loading example' :
       preview ? 'Syntax preview · compiler support pending' : 'Source edited';
     selectTab('console');

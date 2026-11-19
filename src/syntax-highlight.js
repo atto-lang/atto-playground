@@ -4,7 +4,7 @@
  */
 const KEYWORDS = new Set(('pub private define fnc routine class actor module struct trait interface ' +
   'final val const let mut return if then elif elseif else fi while do done for loop break continue ' +
-  'match switch select over on when default end async await spawn defer recover try catch throw raise panic ' +
+  'match switch select over on when default end async await spawn yield generator supervisor channel emit is pipe AND OR XOR defer recover try catch throw raise panic ' +
   'extends implements as new static suspend suspends trap shared untrusted type where ' +
   'readch writech nb using with use task').split(' '));
 const TYPES = new Set('int bool boolean void string String Symbol Result Option Error float f64 double ActorRef ActorMail Channel Future Task Observable Subscription'.split(' '));
