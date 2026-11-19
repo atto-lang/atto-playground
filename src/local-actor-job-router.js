@@ -64,6 +64,9 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
     throw new RangeError('E_ACTOR_JOB_LIMIT: invalid max_jobs');
   }
   const receipts = new Map();
+  // Opaque per-admission markers are never returned in user-visible receipts.
+  // Only the trusted mailbox adapter receives them; the Wasm guest does not.
+  const claims = new WeakMap();
   let closed = false, busy = false;
 
   function checked_open() {
@@ -87,7 +90,7 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
       if (previous.fingerprint !== dest.fingerprint || previous.value !== value) {
         throw new Error('E_ACTOR_JOB_CONFLICT: job ID already assigned a different target or payload');
       }
-      if (previous.state !== 'admitted') {
+      if (previous.state === 'indeterminate') {
         throw new Error('E_ACTOR_JOB_INDETERMINATE: prior admission outcome is unknown');
       }
       return Object.freeze({ status: 'duplicate', job_id: id, ref: previous.ref });
@@ -100,15 +103,18 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
     busy = true;
     try {
       let ref, empty = false;
+      const pending = { state: 'preparing', fingerprint: dest.fingerprint,
+        value, ref: null, slot: null, claim: Object.freeze({}) };
+      claims.set(pending.claim, pending);
       if (dest.kind === 'actor') {
         ref = registry.lookup(dest.key);
         checked_open();
         if (!ref) throw new Error('E_ACTOR_JOB_ABSENT: actor is not registered and live');
       }
       try {
-        if (dest.kind === 'actor') registry.send(ref, value);
+        if (dest.kind === 'actor') registry.send(ref, value, pending.claim);
         else {
-          const placement = groups.dispatch_one(dest.key, id, value);
+          const placement = groups.dispatch_one(dest.key, id, value, pending.claim);
           if (placement === null) empty = true; // Explicit pre-send outcome.
           else if (!placement || typeof placement.ref !== 'object' || !placement.ref) {
             throw new Error('E_ACTOR_JOB_TARGET: invalid group admission receipt');
@@ -117,20 +123,62 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
       } catch (cause) {
         // All thrown errors may happen AFTER external mailbox admission.
         // An empty group is conveyed only by a successful null return.
-        if (!closed) receipts.set(identity, {
-          state: 'indeterminate', fingerprint: dest.fingerprint, value, ref: null
-        });
+        if (!closed) {
+          pending.state = 'indeterminate';
+          receipts.set(identity, pending);
+        }
         throw new Error('E_ACTOR_JOB_INDETERMINATE: dispatch failed; do not automatically retry', { cause });
       }
       if (empty) throw new Error('E_ACTOR_GROUP_EMPTY: no live workers registered');
       if (closed) {
         throw new Error('E_ACTOR_JOB_INDETERMINATE: router closed during admission');
       }
-      receipts.set(identity, { state: 'admitted', fingerprint: dest.fingerprint, value, ref });
+      pending.state = 'admitted';
+      pending.ref = ref;
+      receipts.set(identity, pending);
       return Object.freeze({ status: 'admitted', job_id: id, ref });
     } finally {
       busy = false;
     }
+  }
+
+  /** Trusted mailbox callback: bind a fresh router-issued claim to the exact
+   * monotonically allocated actor slot before queue insertion. Never call
+   * this for ordinary, uncorrelated actor sends. A bad claim fails closed. */
+  function bind_mailbox(claim, slot) {
+    checked_open();
+    const record = claim && typeof claim === 'object' ? claims.get(claim) : null;
+    if (!record || record.state !== 'preparing' || record.slot !== null ||
+        !Number.isSafeInteger(slot) || slot < 0) {
+      throw new Error('E_ACTOR_JOB_CLAIM: unknown, duplicate or invalid mailbox claim');
+    }
+    record.slot = slot;
+  }
+
+  /** Host observation after a real Wasm receive call, NOT a guest ACK.
+   * An observed return means actor_receive returned and memory validation
+   * succeeded; it does not prove an external side effect or durability. */
+  function observe_job(claim, slot, event) {
+    checked_open();
+    const record = claim && typeof claim === 'object' ? claims.get(claim) : null;
+    if (!record || record.slot !== slot || !Number.isSafeInteger(slot) || slot < 0) {
+      throw new Error('E_ACTOR_JOB_CLAIM: forged, stale or foreign delivery observation');
+    }
+    if (event === 'started' &&
+        (record.state === 'admitted' || record.state === 'indeterminate')) {
+      record.state = 'observed_started';
+    } else if (event === 'returned' && record.state === 'observed_started') {
+      record.state = 'observed_executed';
+    } else if (event === 'lost' &&
+        (record.state === 'admitted' || record.state === 'observed_started' ||
+         record.state === 'indeterminate' || record.state === 'preparing')) {
+      // Lost acknowledgements and traps may follow side effects. Never
+      // permit blind redelivery, regardless of whether the actor started.
+      record.state = 'indeterminate';
+    } else {
+      throw new Error('E_ACTOR_JOB_STATE: invalid delivery observation transition');
+    }
+    return record.state;
   }
 
   function inspect(namespace, job_id) {
@@ -149,6 +197,6 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
     receipts.clear();
   }
 
-  return Object.freeze({ dispatch_job, inspect, close,
+  return Object.freeze({ dispatch_job, bind_mailbox, observe_job, inspect, close,
     get size() { return receipts.size; } });
 }
