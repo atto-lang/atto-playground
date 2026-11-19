@@ -96,9 +96,10 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
       throw new Error('E_ACTOR_JOB_FULL: local job receipt capacity reached');
     }
 
+    checked_open(); // A hostile key getter must not close the router unnoticed.
     busy = true;
     try {
-      let ref;
+      let ref, empty = false;
       if (dest.kind === 'actor') {
         ref = registry.lookup(dest.key);
         checked_open();
@@ -106,18 +107,22 @@ export function createLocalActorJobRouter({ registry, groups, max_jobs = 4096 } 
       }
       try {
         if (dest.kind === 'actor') registry.send(ref, value);
-        else ref = groups.dispatch_one(dest.key, id, value).ref;
-      } catch (cause) {
-        // An empty group has not attempted a send. Every other send error
-        // may occur AFTER an external mailbox accepted the message.
-        if (dest.kind === 'group' && /^E_ACTOR_GROUP_EMPTY:/.test(cause?.message ?? '')) {
-          throw cause;
+        else {
+          const placement = groups.dispatch_one(dest.key, id, value);
+          if (placement === null) empty = true; // Explicit pre-send outcome.
+          else if (!placement || typeof placement.ref !== 'object' || !placement.ref) {
+            throw new Error('E_ACTOR_JOB_TARGET: invalid group admission receipt');
+          } else ref = placement.ref;
         }
+      } catch (cause) {
+        // All thrown errors may happen AFTER external mailbox admission.
+        // An empty group is conveyed only by a successful null return.
         if (!closed) receipts.set(identity, {
           state: 'indeterminate', fingerprint: dest.fingerprint, value, ref: null
         });
         throw new Error('E_ACTOR_JOB_INDETERMINATE: dispatch failed; do not automatically retry', { cause });
       }
+      if (empty) throw new Error('E_ACTOR_GROUP_EMPTY: no live workers registered');
       if (closed) {
         throw new Error('E_ACTOR_JOB_INDETERMINATE: router closed during admission');
       }
