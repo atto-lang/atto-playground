@@ -180,3 +180,49 @@ test('capturing job identity in unsupported actor string state fails compilation
   assert.match(JSON.stringify(compiled.diagnostics),
     /E_UNSUPPORTED_TYPE: field 'Worker.saved'.*actor fields may be int or bool/);
 });
+
+
+test('forged guest descriptors and negative attempt trap before any ACK import',()=>{
+  const f=fixture();
+  let acks=0;
+  const bridge=guestImports(f.module,{text:'',truncated:false},{
+    jobAck(){acks++;}
+  });
+  const guest=new WebAssembly.Instance(f.module,bridge.imports);
+  bridge.bind(guest);
+  guest.exports.actor_init(0);
+  const receive=guest.exports.actor_receive_job;
+  const id=(65536n<<32n)|4n;
+  const corr=(65540n<<32n)|5n;
+  for(const args of [
+    [0,1n,-1n,id,0n,corr],          // negative FIFO sequence
+    [0,1n,0n,id,-1n,corr],          // negative attempt
+    [0,1n,0n,0n,0n,corr],           // zero pointer/length
+    [0,1n,0n,(0n<<32n)|4n,0n,corr], // static data, not identity region
+    [0,1n,0n,(131071n<<32n)|9n,0n,corr], // crosses metadata limit
+    [0,1n,0n,(65536n<<32n)|4097n,0n,corr], // oversize job ID
+    [0,1n,0n,id,0n,(65540n<<32n)|257n], // oversize correlation
+  ]){
+    assert.throws(()=>receive(...args),WebAssembly.RuntimeError);
+  }
+  assert.equal(acks,0,'invalid metadata must trap before calling imported ACK');
+  f.host.close();
+});
+
+test('append-only job identity region fails closed on exhaustion without reassignment',async()=>{
+  const f=fixture(base('    job.ack();')),k=f.key();
+  f.host.registry.register(k);
+  const names=[];
+  for(let i=0;i<180;i++){
+    const id=('x'.repeat(400))+i;
+    names.push(id);
+    assert.equal(f.host.jobs.dispatch_job({job_id:id,target:{kind:'actor',key:k},value:BigInt(i)}).status,'admitted');
+  }
+  assert.match(await f.host.drain(),/E_ACTOR_JOB_METADATA_FULL/);
+  assert.equal(f.host.jobs.inspect('tenant-a',names[0]).status,'completed');
+  assert.equal(f.host.jobs.inspect('tenant-a',names[names.length-1]).status,'indeterminate');
+  assert.throws(()=>f.host.jobs.dispatch_job({job_id:names[names.length-1],
+    target:{kind:'actor',key:k},value:179n}),/E_ACTOR_JOB_INDETERMINATE/);
+  assert.ok(f.host.stats.droppedMessages>0);
+  f.host.close();
+});
