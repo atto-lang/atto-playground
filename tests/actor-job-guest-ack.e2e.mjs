@@ -149,3 +149,31 @@ test('high-volume 1,000 real guest jobs ACK once without identity aliasing',asyn
   assert.equal(f.host.stats.pendingMessages,0);
   f.host.close();
 });
+
+
+test('retained first job ID never aliases the later job metadata region',async()=>{
+  const source=[
+    'define serial actor Worker as',
+    '  let string saved = "";',
+    '  receive(Job<int> job): void {',
+    '    if job.payload == 1 {',
+    '      self.saved = job.job_id;',
+    '    } else {',
+    '      stdio.println(self.saved);',
+    '    } fi',
+    '    job.ack();',
+    '    return;',
+    '  }',
+    'end',
+    'pub fnc main(): int { return 0; }'
+  ].join('\n');
+  const f=fixture(source),k=f.key();
+  f.host.registry.register(k);
+  f.host.jobs.dispatch_job({job_id:'first-ID',target:{kind:'actor',key:k},value:1n});
+  f.host.jobs.dispatch_job({job_id:'second-ID',target:{kind:'actor',key:k},value:2n});
+  assert.equal(await f.host.drain(),null);
+  assert.equal(f.out.text,'first-ID\n','saved job string must not alias next message');
+  assert.equal(f.host.jobs.inspect('tenant-a','first-ID').status,'completed');
+  assert.equal(f.host.jobs.inspect('tenant-a','second-ID').status,'completed');
+  f.host.close();
+});
