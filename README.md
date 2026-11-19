@@ -10,10 +10,11 @@ This is the canonical [atto-playground](https://github.com/atto-lang/atto-playgr
 
 ## Verify locally
 
-Requires Node 20 or later for the checked-in Node verification. There are no npm dependencies. The current `serve` package script still depends on a Python static server and must be migrated to compliant Rust/Node tooling; do not treat that script as the recommended development path.
+Requires Node 20 or later for the checked-in Node verification. There are no npm dependencies. The `serve` command is a loopback-only, dependency-free Node static server. It restricts access to the Pages asset allowlist, serves WebAssembly with the correct MIME type, rejects symlinks/path traversal and applies CSP headers; it never compiles user source on a server.
 
 ```sh
 npm run verify          # receipt digest, compiler ABI, examples, guests, worker tests
+npm run serve           # http://127.0.0.1:8080, loopback only
 CHROME_BIN=... npm run test:e2e   # 17 real-browser scenarios under /play/
 ```
 
