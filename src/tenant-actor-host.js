@@ -18,6 +18,8 @@ import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
 const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
 const MAX_MEMORY_BYTES = 1 << 20;
+// Aggregate outstanding mail budget; scoped to the disposable tenant.
+export const MAX_TOTAL_PENDING_MESSAGES = 20_000;
 const YIELD_EVERY = 64;
 
 export function createTenantActorHost({ module, names, out }) {
@@ -30,6 +32,7 @@ export function createTenantActorHost({ module, names, out }) {
   let closed = false;
   let draining = false;
   let admissionClosed = false;
+  let pendingMessages = 0, droppedMessages = 0;
 
   function label(a) { return `${a.name}#${a.ref}`; }
   function flush(a) {
@@ -46,10 +49,14 @@ export function createTenantActorHost({ module, names, out }) {
       fault = `${description} in actor ${label(a)}`;
     }
     a.failed = true;
+    const lost = a.mailbox.length - a.head;
+    pendingMessages -= lost;
+    droppedMessages += lost;
     flush(a);
     // A trapped/failed actor may have allocated guest linear memory.
     // Never retain it as an inactive keyed activation.
     a.mailbox.length = 0;
+    a.head = 0;
     a.instance = null;
   }
   function checkMemory(a) {
@@ -105,8 +112,12 @@ export function createTenantActorHost({ module, names, out }) {
     if (a.sent >= MAX_MAILBOX) {
       throw new Error(`E_MAILBOX_FULL: actor ${label(a)} already has ${MAX_MAILBOX} messages`);
     }
+    if (pendingMessages >= MAX_TOTAL_PENDING_MESSAGES) {
+      throw new Error('E_ACTOR_TOTAL_MAILBOX: aggregate pending-message budget exceeded');
+    }
     a.mailbox.push({ value, sequence: a.sent });
     a.sent++;
+    pendingMessages++;
   }
 
   function isLive(ref) {
@@ -119,7 +130,11 @@ export function createTenantActorHost({ module, names, out }) {
     if (closed || !actor) return false;
     const wasLive = !actor.failed && actor.instance !== null;
     actor.failed = true;
+    const lost = actor.mailbox.length - actor.head;
+    pendingMessages -= lost;
+    droppedMessages += lost;
     actor.mailbox.length = 0;
+    actor.head = 0;
     actor.instance = null;
     actor.output.text = '';
     actor.output.truncated = false;
@@ -146,7 +161,14 @@ export function createTenantActorHost({ module, names, out }) {
           // siblings still drain before the tenant reports the first fault.
           if (a.failed || a.head >= a.mailbox.length) continue;
           progressed = true;
-          const { value, sequence } = a.mailbox[a.head++];
+          const offset = a.head++;
+          const { value, sequence } = a.mailbox[offset];
+          a.mailbox[offset] = null; // never retain delivered guest values
+          pendingMessages--;
+          if (a.head === a.mailbox.length) {
+            a.mailbox.length = 0;
+            a.head = 0;
+          }
           try {
             a.instance.exports.actor_receive(a.type, value, BigInt(sequence));
             checkMemory(a);
@@ -169,14 +191,18 @@ export function createTenantActorHost({ module, names, out }) {
   }
 
   function close() {
+    if (closed) return;
     closed = true;
     groups.close();
     registry.close();
     for (const a of actors) {
+      droppedMessages += a.mailbox.length - a.head;
       a.mailbox.length = 0;
+      a.head = 0;
       a.instance = null;
       a.output.text = '';
     }
+    pendingMessages = 0;
   }
 
   function getOrCreate(type, namespace, applicationKey) {
@@ -195,6 +221,10 @@ export function createTenantActorHost({ module, names, out }) {
     get count() { return actors.length; },
     get memoryBytes() {
       return actors.reduce((sum, a) => sum + (a.instance?.exports.memory?.buffer.byteLength ?? 0), 0);
+    },
+    get stats() {
+      return Object.freeze({ pendingMessages, droppedMessages,
+        maxPendingMessages: MAX_TOTAL_PENDING_MESSAGES });
     }
   };
 }

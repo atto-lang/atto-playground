@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTenantActorHost } from '../src/tenant-actor-host.js';
+import { createTenantActorHost, MAX_TOTAL_PENDING_MESSAGES } from '../src/tenant-actor-host.js';
 import { guestImports } from '../src/guest.js';
 
 // This constructs a real, minimal core-Wasm actor module; no stubbed guest
@@ -275,4 +275,60 @@ test('guest import fails closed after drain and with no actor capability', async
   const module = new WebAssembly.Module(actorFixture());
   const unprivileged = guestImports(module, { text: '', truncated: false });
   assert.throws(() => unprivileged.imports.atto.actor_get_or_create(0, namespace, key), /E_ACTOR/);
+});
+
+test('aggregate pending-mail quota admits exactly 20,000 across actors then rejects before enqueue', () => {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const first = host.spawn(0), second = host.spawn(0), third = host.spawn(0);
+  assert.equal(MAX_TOTAL_PENDING_MESSAGES, 20_000);
+  for (let i = 0; i < 10_000; i++) {
+    host.send(first, 1n);
+    host.send(second, 2n);
+  }
+  assert.deepEqual(host.stats, {
+    pendingMessages: 20_000, droppedMessages: 0, maxPendingMessages: 20_000
+  });
+  assert.throws(() => host.send(third, 3n), /E_ACTOR_TOTAL_MAILBOX: aggregate pending-message budget exceeded/);
+  assert.equal(host.stats.pendingMessages, 20_000, 'failed admission does not reserve quota');
+  host.close();
+  assert.equal(host.stats.pendingMessages, 0);
+  assert.equal(host.stats.droppedMessages, 20_000, 'closing releases all queued graph references');
+  assert.ok(Object.isFrozen(host.stats));
+});
+
+test('actor trap drops its remaining queued mail without dropping healthy siblings', async () => {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const bad = host.spawn(0), good = host.spawn(0);
+  host.send(bad, 7n); // first delivery traps
+  host.send(bad, 9n);
+  host.send(bad, 10n);
+  host.send(good, 1n);
+  host.send(good, 2n);
+  assert.equal(host.stats.pendingMessages, 5);
+  assert.match(await host.drain(), /in actor Counter#0/);
+  assert.equal(host.memoryBytes, 65536, 'faulted actor heap is released while healthy sibling stays live');
+  assert.equal(out.text, '12', 'healthy actor receives each queued message in order');
+  assert.deepEqual(host.stats, {
+    pendingMessages: 0, droppedMessages: 2, maxPendingMessages: 20_000
+  });
+  host.close();
+  assert.equal(host.stats.droppedMessages, 2, 'closed host never double-counts already dropped mail');
+});
+
+test('successful tenant drain releases aggregate reservations and keeps admission sealed', async () => {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const actor = host.spawn(0);
+  for (let i = 0; i < 65; i++) host.send(actor, 3n);
+  assert.equal(host.stats.pendingMessages, 65);
+  assert.equal(await host.drain(), null);
+  assert.equal(host.stats.pendingMessages, 0);
+  assert.equal(host.stats.droppedMessages, 0);
+  assert.throws(() => host.send(actor, 3n), /mailbox admission closed/);
+  host.close();
 });
