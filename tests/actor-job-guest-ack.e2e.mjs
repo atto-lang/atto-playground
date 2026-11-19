@@ -151,7 +151,7 @@ test('high-volume 1,000 real guest jobs ACK once without identity aliasing',asyn
 });
 
 
-test('retained first job ID never aliases the later job metadata region',async()=>{
+test('capturing job identity in unsupported actor string state fails compilation',async()=>{
   const source=[
     'define serial actor Worker as',
     '  let string saved = "";',
@@ -167,13 +167,11 @@ test('retained first job ID never aliases the later job metadata region',async()
     'end',
     'pub fnc main(): int { return 0; }'
   ].join('\n');
-  const f=fixture(source),k=f.key();
-  f.host.registry.register(k);
-  f.host.jobs.dispatch_job({job_id:'first-ID',target:{kind:'actor',key:k},value:1n});
-  f.host.jobs.dispatch_job({job_id:'second-ID',target:{kind:'actor',key:k},value:2n});
-  assert.equal(await f.host.drain(),null);
-  assert.equal(f.out.text,'first-ID\n','saved job string must not alias next message');
-  assert.equal(f.host.jobs.inspect('tenant-a','first-ID').status,'completed');
-  assert.equal(f.host.jobs.inspect('tenant-a','second-ID').status,'completed');
-  f.host.close();
+  // Actor fields are deliberately scalar-only in this browser subset.
+  // Persisting a borrowed job descriptor in actor state must fail at compile
+  // time, rather than silently alias a later job's memory.
+  const compiled=compiler.compile(source);
+  assert.equal(compiled.ok,false,'actor string state is not admitted');
+  assert.match(JSON.stringify(compiled.diagnostics),
+    /E_UNSUPPORTED_TYPE: field 'Worker.saved'.*actor fields may be int or bool/);
 });
