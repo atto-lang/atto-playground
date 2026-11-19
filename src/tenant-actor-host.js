@@ -10,14 +10,15 @@
  * There is NO preemption inside a guest call yet. The outer runner deadline
  * must terminate the tenant worker if a guest loops forever.
  */
+import { createLocalActorRegistry } from './local-actor-registry.js';
+import { createLocalActorGroups, createLocalPubSub } from './local-actor-groups.js';
 import { appendCapped, describePanic, guestImports } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
 
 const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
 const MAX_MEMORY_BYTES = 1 << 20;
-// Port the aggregate pending-mail budget from legacy actor-runtime PR #43.
-// The active in-worker scheduler has no child Workers or generation reuse.
+// Aggregate outstanding mail budget; scoped to the disposable tenant.
 export const MAX_TOTAL_PENDING_MESSAGES = 20_000;
 const YIELD_EVERY = 64;
 
@@ -48,16 +49,14 @@ export function createTenantActorHost({ module, names, out }) {
       fault = `${description} in actor ${label(a)}`;
     }
     a.failed = true;
-    // A trapped actor can never receive the remainder of its admitted mail.
-    // Release logical admissions and guest-value references immediately.
     const lost = a.mailbox.length - a.head;
     pendingMessages -= lost;
     droppedMessages += lost;
+    flush(a);
+    // A trapped/failed actor may have allocated guest linear memory.
+    // Never retain it as an inactive keyed activation.
     a.mailbox.length = 0;
     a.head = 0;
-    flush(a);
-    // The failed actor cannot receive again: drop its guest heap immediately,
-    // without waiting for healthy siblings or the tenant-wide final close.
     a.instance = null;
   }
   function checkMemory(a) {
@@ -121,6 +120,27 @@ export function createTenantActorHost({ module, names, out }) {
     pendingMessages++;
   }
 
+  function isLive(ref) {
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    return !closed && !!actor && !actor.failed && actor.instance !== null;
+  }
+
+  function retire(ref) {
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    if (closed || !actor) return false;
+    const wasLive = !actor.failed && actor.instance !== null;
+    actor.failed = true;
+    const lost = actor.mailbox.length - actor.head;
+    pendingMessages -= lost;
+    droppedMessages += lost;
+    actor.mailbox.length = 0;
+    actor.head = 0;
+    actor.instance = null;
+    actor.output.text = '';
+    actor.output.truncated = false;
+    return wasLive;
+  }
+
   /** Round-robin, one mailbox entry per actor per sweep. This yields the JS
    * event loop between bounded groups of completed guest calls, never within
    * a guest Wasm invocation. Actor-to-actor sends are denied by guestImports.
@@ -143,7 +163,7 @@ export function createTenantActorHost({ module, names, out }) {
           progressed = true;
           const offset = a.head++;
           const { value, sequence } = a.mailbox[offset];
-          a.mailbox[offset] = null; // do not retain delivered object graphs
+          a.mailbox[offset] = null; // never retain delivered guest values
           pendingMessages--;
           if (a.head === a.mailbox.length) {
             a.mailbox.length = 0;
@@ -171,7 +191,10 @@ export function createTenantActorHost({ module, names, out }) {
   }
 
   function close() {
+    if (closed) return;
     closed = true;
+    groups.close();
+    registry.close();
     for (const a of actors) {
       droppedMessages += a.mailbox.length - a.head;
       a.mailbox.length = 0;
@@ -182,8 +205,19 @@ export function createTenantActorHost({ module, names, out }) {
     pendingMessages = 0;
   }
 
+  function getOrCreate(type, namespace, applicationKey) {
+    const ref = registry.get_or_create({
+      namespace, actor_type: type, application_key: applicationKey
+    });
+    // Exact physical incarnation, not a virtual ref, for existing i32 ABI.
+    return registry.slot_for(ref);
+  }
+
+  const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
+  const groups = createLocalActorGroups({ registry });
+  const pubsub = createLocalPubSub(groups);
   return {
-    spawn, send, drain, close,
+    spawn, send, getOrCreate, drain, close, isLive, retire, registry, groups, pubsub,
     get count() { return actors.length; },
     get memoryBytes() {
       return actors.reduce((sum, a) => sum + (a.instance?.exports.memory?.buffer.byteLength ?? 0), 0);
