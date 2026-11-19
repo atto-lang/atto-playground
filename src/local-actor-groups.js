@@ -176,6 +176,64 @@ export function createLocalActorGroups({registry, max_groups = 128,
     });
   }
 
+  // Deterministic rendezvous ranking: a stable job ID chooses ONE currently
+  // eligible member. Changing membership may change assignment for a *new*
+  // attempt; the job router separately fences retries of admitted IDs.
+  function jobScore(job_id, slot) {
+    const bytes = utf8.encode(JSON.stringify([job_id, slot]));
+    let hash = 0xcbf29ce484222325n;
+    for (const byte of bytes) {
+      hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
+    }
+    return hash;
+  }
+
+  function dispatch_one(group, job_id, payload) {
+    return run(() => {
+      if (typeof payload !== 'bigint' || payload < I64_MIN || payload > I64_MAX) {
+        throw new TypeError('E_ACTOR_GROUP_PAYLOAD: current guest ABI requires signed i64');
+      }
+      const job = name(job_id, 'job_id');
+      if (utf8.encode(job).length > 4096) {
+        throw new TypeError('E_ACTOR_GROUP_KEY: job_id exceeds 4096 UTF-8 bytes');
+      }
+      const key = id(normalize(group));
+      const existing = groups.get(key);
+      if (existing) prune(key, existing);
+      const current = groups.get(key);
+      if (!current || !current.members.size) {
+        throw new Error('E_ACTOR_GROUP_EMPTY: no live workers registered');
+      }
+      let selected = null, best = -1n, selectedSlot = Infinity;
+      for (const ref of current.members.keys()) {
+        const slot = registry.slot_for(ref);
+        if (!Number.isSafeInteger(slot) || slot < 0) {
+          throw new Error('E_ACTOR_GROUP_REF: invalid physical actor slot');
+        }
+        const score = jobScore(job, slot);
+        if (score > best || (score === best && slot < selectedSlot)) {
+          best = score;
+          selectedSlot = slot;
+          selected = ref;
+        }
+      }
+      if (closed) throw new Error('E_ACTOR_GROUP_CLOSED: service closed during selection');
+      try {
+        // This send is the mailbox-admission linearization point. Never
+        // retry a different member on error: admission may have happened.
+        registry.send(selected, payload);
+      } catch (error) {
+        if (/^E_ACTOR_REF_STALE:/.test(error?.message ?? '')) {
+          const now = groups.get(key);
+          if (now) drop(key, now, selected);
+        }
+        throw error;
+      }
+      if (closed) throw new Error('E_ACTOR_GROUP_CLOSED: service closed during admission');
+      return Object.freeze({ ref: selected });
+    });
+  }
+
   // Trusted-host death notification. It removes only the EXACT physical ref,
   // never a fresh incarnation with the same logical key. Hosts must call it
   // on crash/STOP; lazy prune is a fallback, not an equivalent monitor.
@@ -195,7 +253,7 @@ export function createLocalActorGroups({registry, max_groups = 128,
     memberships = 0;
   }
 
-  return Object.freeze({ join, leave, members, broadcast, actor_stopped, close,
+  return Object.freeze({ join, leave, members, broadcast, dispatch_one, actor_stopped, close,
     get group_count() { return groups.size; },
     get membership_count() { return memberships; } });
 }
