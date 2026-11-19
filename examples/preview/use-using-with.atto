@@ -1,4 +1,4 @@
-// PREVIEW ONLY: module use, scoped using, and with effects need browser support.
+// SYNTAX PREVIEW ONLY: module use, scoped using, and with effects need browser support.
 // using must close the span on success, error, cancellation and suspension.
 use core.telemetry;
 use std.time;

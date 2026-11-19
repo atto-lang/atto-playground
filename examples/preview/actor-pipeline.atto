@@ -1,4 +1,4 @@
-// PREVIEW ONLY: actor pipe '|' is NOT boolean OR, and not function '|>'.
+// SYNTAX PREVIEW ONLY: actor pipeline uses the pipe keyword, distinct from boolean operators and function '|>'.
 // A message passes through 3 actor mailboxes with bounded backpressure.
 define actor Parse as
   receive(ActorMail<int> mail): void {
@@ -19,7 +19,7 @@ define actor Sink as
 end
 
 pub fnc main(): int {
-  val pipeline = spawn Parse() | spawn Validate() | spawn Sink();
+  val pipeline = spawn Parse() pipe spawn Validate() pipe spawn Sink();
   pipeline.send(41); // Sink receives 42, in FIFO order.
   return 0;
 }

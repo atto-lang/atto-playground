@@ -1,4 +1,4 @@
-// PREVIEW ONLY: async generators and for-await need compiler/runtime support.
+// SYNTAX PREVIEW ONLY: async generators and for-await need compiler/runtime support.
 // Every await must be inside a suspends function/method.
 suspends fnc measurements(): AsyncGenerator<int> {
   yield 10;

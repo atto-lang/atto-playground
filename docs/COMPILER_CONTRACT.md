@@ -54,6 +54,12 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 
 `src/compiler.js` checks the ABI version and output bounds. It copies the result out before the next compile.
 
+### Versioned actor ABI handshake (v3 is not executable)
+
+The pinned compiler still emits `atto.browser.guest.v2`. Legacy guest Wasm without the custom section `atto.actor.abi` and explicitly tagged `02 00` guests stay on the synchronous v2 runtime. A compiled module marked exactly `03 00` is recognized as **proposed v3** and rejected with `E_GUEST_ABI_UNSUPPORTED` before a guest instance is instantiated. Duplicate, truncated, trailing-byte, and unknown-version markers fail closed with `E_GUEST_ABI`. Browser, disposable Node workers, persistent Node sessions, and legacy actor worker entrypoints must all enforce this boundary.
+
+This is version negotiation and safety hardening, **not** an implementation of resumable actor execution, compiler-lowered suspension, owned continuation frames, or instruction budgets. The draft `atto-platform-conformance` ABI v3 contract must pass real compiled-Atto execution tests before v3 can be enabled.
+
 ## Guest contract `atto.browser.guest.v2`
 
 - **Exports:** `main: () -> i64` and `panic_code: mut i32` (1 = integer overflow, 2 = division by zero, which is reserved, 3 = heap exhausted (objects and joined strings)). `memory` is exported only for string literals or classes, and with classes it is a fixed 1 MiB. Programs with actors also export `actor_init` and `actor_receive`, and carry an `atto.actors` custom section of type names.
@@ -63,14 +69,14 @@ The compiler has no imports and memory capped at 64 MiB. It exports:
 
 `src/runner-worker.js` runs `main`. When a guest has actors, `src/actor-host.js` grants `actor_spawn` and `actor_send`:
 
-- Each `spawn` starts one dedicated Web Worker (`src/actor-worker.js`) with a private copy of the module. Actor state lives in that instance's globals, so actors share no memory.
-- `send` posts mail with sequence numbers from 0. The actor worker handles mail strictly in order and reports each completion. The host rejects out-of-order or unexpected replies.
-- Limits: 16 actors per run and 10,000 messages per actor (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`). Actors cannot spawn or send.
+- The runner worker acts as one disposable tenant Worker per execution. Every `spawn` creates a separate `WebAssembly.Instance` from the same compiled `WebAssembly.Module`. Actors have private globals and, when declared by the compiled module, separate private linear memories; no per-actor Worker is created.
+- `send` queues mail with sequence numbers from 0. The tenant runtime drains one message per actor per round-robin pass, preserving each actor's FIFO order and preventing one busy mailbox from starving other completed handlers.
+- Limits: 16 actors per run, 10,000 messages admitted per actor, and 20,000 **pending messages across the entire tenant** (`E_ACTOR_LIMIT`, `E_MAILBOX_FULL`, `E_ACTOR_TOTAL_MAILBOX`). The global quota is reserved on enqueue and released upon delivery, trap-drop, or tenant close. Actors cannot spawn or send.
 - The run ends when `main` has returned and every mailbox has drained, which matches the Java reference. Output from different actors may interleave in any order.
-- A panicking actor fails the run as `E_PANIC: … in actor Name#n` and stops receiving mail.
-- Stop and the 3-second deadline terminate the runner worker, which ends every actor worker it owns.
+- A trapping actor is marked failed; the tenant continues draining healthy sibling actors, then reports the first fault as `E_RUNTIME` or `E_PANIC` with the actor identity. A non-returning guest call still blocks the tenant Worker until the outer deadline kills it.
+- Stop and the 3-second deadline terminate the runner worker, invalidating every actor instance and mailbox in that tenant.
 
-Each guest runs in a fresh worker with a 3-second deadline, which ends infinite loops. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
+Each guest runs in a fresh tenant worker with a 3-second deadline, which ends infinite loops by killing the *whole tenant*, not just the looping actor. Compilation has its own 10-second deadline, because the first run includes downloading the compiler. A timeout message names the phase that exceeded its deadline. A browser worker is not OS-level isolation, so the host must never grant other imports.
 
 ## Static release and disclosure gate
 
@@ -80,10 +86,55 @@ The Pages workflow is **not an auto-publisher**: deployment requires `workflow_d
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v2` intentionally permits bounded stdout imports, memory for string literals and objects, and the bounded actor capabilities. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
 
-## Example dropdown and boolean migration
+## Syntax previews (not part of the pinned compiler)
 
-The canonical boolean operator spelling is **`&&` (AND), `||` (OR), and `^^` (XOR)**. Single `&` / `|` and comma are **not** canonical boolean operator spellings. The currently pinned compiler still accepts the legacy condition-only `,` and `|` grammar; this compatibility behavior is **not** the target language design. Its supported `And(a,b)`, `Or(a,b)`, and `Xor(a,b)` functions are used in the runnable Conditions sample until a verified compiler upgrade lands. Uppercase infix `AND`, `OR`, `XOR` are language-design candidates, **not** supported lexer tokens here. Do not infer short-circuit behavior from the function variants: arguments evaluate before the call.
+The dropdown separates executable examples from **syntax previews**. These seven
+`.atto` files are educational design sketches, not proven compilable programs.
+The UI disables Run for the original preview text, and does not return a Wasm
+artifact. Editing a preview unlocks Run so the user can experiment with the
+real compiler; unsupported constructs still fail closed with an `E_*` diagnostic.
 
-The **Language previews** dropdown contains ten illustrative `.atto` sources in `examples/preview/`: operators, generators, async iterators, suspending tasks/await, match guards, typed `is` matches, `use`/`using`/`with`, function `|>` pipelines, actor `|` pipes and `define supervisor` mailbox ping-pong. Those sources are **not compiled or executable** in this pinned browser compiler. Some proposed grammar and API spellings require design and backend conformance before stabilization. The editor labels every preview, and the compiler remains fail-closed (no guest Wasm on rejection). Do not count visual presence as executed feature coverage.
+| Preview | Demonstrates | Status |
+| --- | --- | --- |
+| `trap.atto` | Proposed explicit fatal trap; not interchangeable with `Err` | Keyword and fault boundary semantics need compiler/runtime specification |
+| `result-option.atto` | `Result<T,E>`, `Option<T>`, `Ok`, `Err`, `Some`, `None` | Generic ADTs and constructors not lowered |
+| `channel-bounded.atto` | Bounded mailbox capacity and suspending backpressure | Channel constructors and scheduler integration not lowered |
+| `channel-probe.atto` | `try readch` immediate probe vs `nb readch` future | Grammar has wait modes; browser compiler does not |
+| `channel-unbounded.atto` | Unbounded buffer, waiting receiver, quotas | Unbounded != infinite memory or nonblocking receive |
+| `rx-observable.atto` | Observable map/filter/take and subscription lifetime | Proposed `rx` stdlib API, not validated language ABI |
+| `rx-interop.atto` | Observable↔channel adapters, Task/Future, `suspends`/`await` | Proposed adapter names; cancellation, errors and ownership need specification |
 
-While a built-in language preview is selected, Run, Format and Check format are disabled. Keyboard shortcuts are guarded independently, and a change back to a runnable or custom program restores the controls. Preview code is treated only as text; selecting it does not create or execute guest Wasm. Copy a preview with **Custom +** to experiment, but unsupported source will still fail closed.
+The reference grammar describes `readch`/`writech` as suspending,
+`nb` variants as future-returning, and `try` as immediate one-shot probes.
+Unbounded channel sends avoid waiting *for a fixed-capacity slot*, but receive
+can still suspend while empty; memory quotas and cancellation still apply.
+An Rx subscription must be explicitly cancelled/disposed. Observables are
+push streams, not directly awaitable: an adapter such as `first_task()` must
+bridge to a future and define completion, error and cancellation behavior.
+
+**Release gate:** do not relabel these samples executable until an approved,
+pinned compiler and browser runtime pass real guest execution tests. Packaging
+a text sample does not authorize publication of a new compiler binary.
+
+## Explicit trap panic code (future compiler compatibility)
+
+The guest contract reserves `panic_code=4` for an explicit, terminal
+`trap;` statement. The browser host renders this as
+`E_PANIC: explicit terminal trap`. A trap is not an `Err` value
+and does not become catchable through `Result`. This compatibility
+mapping does **not** imply the currently pinned public compiler can emit
+this code; the proposed compiler implementation requires its own
+review, native/Wasm tests, and authorized binary promotion.
+
+
+## Tenant memory admission (v2)
+
+`src/wasm-memory-admission.js` parses the verified guest Wasm bytes **before** the first guest instance is constructed. The tenant runner rejects memory64, shared, unbounded and multiple memories, malformed declarations and declared Wasm32 maxima exceeding **16 × 64 KiB pages (1 MiB)**. This matches the pinned v2 class/string heap budget; it is not a configurable actor arena.
+
+Every actor is still a separate Wasm instance with separate globals. A legacy scalar-only actor guest may have **no linear memory at all** until `atto-source.rs#61` is rebuilt and vendored through the compiler receipt gate; the planned updated emitter exports one bounded 64 KiB memory for those actors. There is no compiler-managed suspended stack, actor-local preemption or general `await` support in v2. On a non-yielding Wasm call, only the parent deadline can terminate the entire worker.
+
+## Additional language-design previews
+
+The ten examples under `examples/preview/` are intentionally **source-only language previews**; the currently pinned browser compiler does not promise support for their syntax. The dropdown labels them as previews, and loading an untouched preview disables Run and formatting without creating any guest Wasm. Editing a preview explicitly opts into an ordinary compile attempt, which must still fail closed for unsupported syntax.
+
+For new source, boolean operators are proposed as `&&`, `||`, `^^`; the pinned compiler's legacy conditional comma and single pipe are compatibility syntax only. `And(a,b)`, `Or(a,b)`, and `Xor(a,b)` remain callable builtins. The actor pipeline preview uses the distinct `pipe` keyword, while ordinary functional pipelines use `|>`. Primitive value comparisons use `eq`, not reference-identity `==`.

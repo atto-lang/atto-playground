@@ -1,4 +1,4 @@
-// PREVIEW ONLY: generators/yield are not yet lowered by the browser compiler.
+// SYNTAX PREVIEW ONLY: generators/yield are not yet lowered by the browser compiler.
 // Proposed source-level API; generator ownership and cancellation need conformance.
 fnc count_to(int limit): Generator<int> {
   for (let i = 1; i <= limit; i++) do

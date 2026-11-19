@@ -1,4 +1,4 @@
-// PREVIEW ONLY: the pinned browser compiler does not yet accept these operators.
+// SYNTAX PREVIEW ONLY: the pinned browser compiler does not yet accept these operators.
 // Canonical intent: && AND, || OR, ^^ XOR; no single | or & boolean operators.
 // And(a,b), Or(a,b), Xor(a,b) are supported compatibility functions.
 pub fnc main(): int {

@@ -4,10 +4,11 @@
  */
 const KEYWORDS = new Set(('pub private define fnc routine class actor module struct trait interface ' +
   'final val const let mut return if then elif elseif else fi while do done for loop break continue ' +
-  'match switch select over on when default end async await suspends yield generator spawn task supervisor channel use using with is emit defer recover try catch throw raise panic ' +
-  'extends implements as new static suspend trap shared untrusted type where AND OR XOR').split(' '));
-const TYPES = new Set('int bool boolean void string String Symbol Result Option Error float f64 double ActorRef ActorMail'.split(' '));
-const LITERALS = new Set('true false null none nil'.split(' '));
+  'match switch select over on when default end async await spawn yield generator supervisor channel emit is pipe AND OR XOR defer recover try catch throw raise panic ' +
+  'extends implements as new static suspend suspends trap shared untrusted type where ' +
+  'readch writech nb using with use task').split(' '));
+const TYPES = new Set('int bool boolean void string String Symbol Result Option Error float f64 double ActorRef ActorMail Channel Future Task Observable Subscription'.split(' '));
+const LITERALS = new Set('true false null none nil None'.split(' '));
 const HYPHEN_KEYWORDS = ['critical-read', 'critical-write', 'nb-select', 'transform-pipe'];
 export function tokenizeAtto(source) {
   const text = String(source), tokens = [];

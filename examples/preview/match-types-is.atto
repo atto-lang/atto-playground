@@ -1,4 +1,4 @@
-// PREVIEW ONLY: type tests ('is') and typed match arms are not yet lowered.
+// SYNTAX PREVIEW ONLY: type tests ('is') and typed match arms are not yet lowered.
 // 'is' checks the runtime/static type; value comparisons remain explicit.
 fnc describe(Any value): string {
   match value over
@@ -11,7 +11,7 @@ fnc describe(Any value): string {
 
 pub fnc main(): int {
   val value: Any = 42;
-  if value is int && value == 42 then
+  if value is int && value eq 42 then
     stdio.println(describe(value));
   fi
   return 0;

@@ -1,4 +1,4 @@
-// PREVIEW ONLY: task, suspends and await are not compiled in the browser yet.
+// SYNTAX PREVIEW ONLY: task, suspends and await are not compiled in the browser yet.
 // await always suspends, so only a suspends fnc/method may contain await.
 suspends fnc twice(int n): int {
   val future: Future<int> = task {

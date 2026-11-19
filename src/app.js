@@ -1,12 +1,12 @@
 import { createWorkerTask } from './worker-task.js';
 import { installEditor } from './editor.js';
-import { formatDiagnostic, formatWasm } from './ui.js';
+import { formatDiagnostic, formatWasm, compilerDiagnosticGuidance } from './ui.js';
 import { installProgramPicker } from './program-picker.js';
 import { mapFormatCaret } from './formatter-runtime.js';
-// Runnable samples and explicitly labeled language previews live in /examples.
-// Preview syntax is illustrative; only the pinned compiler decides admission.
-const PREVIEW_EXAMPLES = new Set(["preview/boolean-operators","preview/generators","preview/async-iterators","preview/tasks-async","preview/match-values","preview/match-types-is","preview/use-using-with","preview/function-pipeline","preview/actor-pipeline","preview/supervisor-mailbox"]);
-const EXAMPLES = ['hello', 'fib', 'primes', 'conditions', 'overflow', 'error', 'classes', 'actors', 'enums', 'floats', 'strings', 'match', ...PREVIEW_EXAMPLES];
+import { EXAMPLES, isPreviewExample } from './example-catalog.js';
+// Example programs live in /examples as real .atto files; each one is also
+// compiled by the Java reference compiler in the differential test suite.
+
 const samples = {};
 async function loadSample(name) {
   if (!EXAMPLES.includes(name)) throw new Error('unknown example');
@@ -23,42 +23,23 @@ const summary = document.querySelector('#summary');
 const runButton = document.querySelector('#run');
 const stopButton = document.querySelector('#stop');
 const selector = document.querySelector('#example');
-const formatButton = document.querySelector('#format');
-const checkFormatButton = document.querySelector('#check-format');
 const supportLabel = document.querySelector('#example-support');
-let working = false;
-let formatting = false;
-function updateExampleSupport() {
-  if (PREVIEW_EXAMPLES.has(selector.value)) {
-    supportLabel.textContent = 'Language preview — not yet executable in the pinned Wasm compiler';
-    supportLabel.dataset.support = 'preview';
-  } else if (selector.value.startsWith('saved:') || selector.value === 'custom:new') {
-    supportLabel.textContent = 'Custom program — compiler support depends on source';
-    supportLabel.dataset.support = 'custom';
-  } else {
-    supportLabel.textContent = 'Runnable with the pinned browser compiler';
-    supportLabel.dataset.support = 'runnable';
-  }
-  const preview = PREVIEW_EXAMPLES.has(selector.value);
-  const controlsDisabled = working || formatting || preview;
-  runButton.disabled = controlsDisabled;
-  formatButton.disabled = controlsDisabled;
-  checkFormatButton.disabled = controlsDisabled;
-  runButton.title = preview ? 'Preview only: choose Custom + to experiment' : 'Compile and run';
-}
-
-updateExampleSupport();
+let sampleLoading = false;
 const shareButton = document.querySelector('#share');
 const downloadButton = document.querySelector('#download');
+const formatButton = document.querySelector('#format');
+const checkFormatButton = document.querySelector('#check-format');
 const diagnostics = document.querySelector('#diagnostics');
 const status = document.querySelector('#status');
 const bytesLabel = document.querySelector('#bytes');
 const wasmPreview = document.querySelector('#wasm-preview');
 const picker = installProgramPicker({
+  onSelectionChange: (loading = false) => { sampleLoading = loading; invalidateArtifact(); },
   selector, editor, nameInput: document.querySelector('#program-name'),
   saveButton: document.querySelector('#save-custom'), deleteButton: document.querySelector('#delete-custom'),
   savedGroup: document.querySelector('#saved-programs'), status, loadSample,
-  onSelectionChange: updateExampleSupport
+  exportButton: document.querySelector('#export-custom'), importButton: document.querySelector('#import-custom'),
+  importFile: document.querySelector('#import-file')
 });
 const tabNames = ['console', 'diagnostics', 'wasm'];
 const tabButtons = tabNames.map(name => document.querySelector('#tab-' + name));
@@ -90,6 +71,14 @@ function showDiagnostic(value) {
   link.setAttribute('aria-label', 'Go to line ' + item.line + ', column ' + item.column + ': ' + item.message);
   link.addEventListener('click', () => jumpTo(item.line, item.column));
   diagnostics.replaceChildren(link);
+  const guidance = compilerDiagnosticGuidance(item);
+  if (guidance) {
+    const hint = document.createElement('p');
+    hint.className = 'diagnostic-guidance';
+    hint.textContent = guidance; // DOM text only; never interpolate source or diagnostics as HTML.
+    diagnostics.append(hint);
+  }
+  return Boolean(guidance);
 }
 const jumpTo = installEditor(editor, {
   gutter: document.querySelector('#line-gutter'),
@@ -97,6 +86,8 @@ const jumpTo = installEditor(editor, {
   onRun: () => { if (!working && !formatting) run(); },
   onFormat: () => { if (!working && !formatting) formatCode(false); }
 });
+let working = false;
+let formatting = false;
 const workerTask = createWorkerTask();
 const formatterTask = createWorkerTask();
 const FORMAT_DEADLINE_MS = 6000;
@@ -104,6 +95,66 @@ const COMPILE_DEADLINE_MS = 10000;
 const RUN_DEADLINE_MS = 3000;
 let runGeneration = 0;
 let lastWasm = null;
+function isUntouchedPreview() {
+  return isPreviewExample(selector.value) && typeof samples[selector.value] === 'string' &&
+    editor.value === samples[selector.value];
+}
+function updateExampleSupport() {
+  if (isPreviewExample(selector.value)) {
+    supportLabel.textContent = isUntouchedPreview()
+      ? 'Language preview — not executable by pinned compiler'
+      : 'Edited language preview — compilation support not guaranteed';
+    supportLabel.dataset.support = 'preview';
+  } else if (selector.value === 'custom:new' || selector.value.startsWith('saved:')) {
+    supportLabel.textContent = 'Custom source — compiler support depends on syntax';
+    supportLabel.dataset.support = 'custom';
+  } else {
+    supportLabel.textContent = 'Executable subset — pinned compiler';
+    supportLabel.dataset.support = 'runnable';
+  }
+}
+
+const splitter = document.querySelector('#splitter');
+const workbench = document.querySelector('.workbench');
+let editorPaneWidth = 53;
+function resizeEditorPane(value) {
+  if (!Number.isFinite(value)) return;
+  editorPaneWidth = Math.max(25, Math.min(75, Math.round(value)));
+  workbench.style.setProperty('--editor-pane-width', editorPaneWidth + '%');
+  splitter.setAttribute('aria-valuenow', String(editorPaneWidth));
+}
+function resizeFromPointer(event) {
+  const bounds = workbench.getBoundingClientRect();
+  if (bounds.width > 0) resizeEditorPane((event.clientX - bounds.left) * 100 / bounds.width);
+}
+splitter.addEventListener('pointerdown', event => {
+  if (event.button !== 0 && event.pointerType !== 'touch') return;
+  event.preventDefault();
+  splitter.setPointerCapture(event.pointerId);
+  resizeFromPointer(event);
+});
+splitter.addEventListener('pointermove', event => {
+  if (splitter.hasPointerCapture(event.pointerId)) resizeFromPointer(event);
+});
+function endResize(event) {
+  if (splitter.hasPointerCapture(event.pointerId)) splitter.releasePointerCapture(event.pointerId);
+}
+splitter.addEventListener('pointerup', endResize);
+splitter.addEventListener('pointercancel', endResize);
+splitter.addEventListener('dblclick', () => resizeEditorPane(53));
+splitter.addEventListener('keydown', event => {
+  const next = {
+    ArrowLeft: editorPaneWidth - 5,
+    ArrowRight: editorPaneWidth + 5,
+    Home: 25,
+    End: 75,
+    '0': 53
+  }[event.key];
+  if (next === undefined) return;
+  event.preventDefault();
+  resizeEditorPane(next);
+});
+
 
 function display(message, kind = 'neutral') {
   output.textContent = message;
@@ -112,22 +163,17 @@ function display(message, kind = 'neutral') {
 }
 function setRunning(value) {
   working = value;
-  runButton.disabled = value || PREVIEW_EXAMPLES.has(selector.value);
+  runButton.disabled = value || sampleLoading || isUntouchedPreview();
   stopButton.disabled = !value;
   editor.readOnly = value;
   selector.disabled = value;
-  formatButton.disabled = value || PREVIEW_EXAMPLES.has(selector.value);
-  checkFormatButton.disabled = value || PREVIEW_EXAMPLES.has(selector.value);
+  formatButton.disabled = value || sampleLoading || isUntouchedPreview();
+  checkFormatButton.disabled = value || sampleLoading || isUntouchedPreview();
   if (value) status.textContent = 'Compiling';
   else if (status.textContent === 'Compiling' || status.textContent === 'Executing') status.textContent = 'Ready';
 }
 async function run() {
-  if (working || formatting) return;
-  if (PREVIEW_EXAMPLES.has(selector.value)) {
-    status.textContent = 'Preview only';
-    display('Language preview only: the pinned compiler cannot run this example. Choose Custom + to experiment with the code.');
-    return;
-  }
+  if (working || formatting || sampleLoading || isUntouchedPreview()) return;
   const generation = ++runGeneration;
   setRunning(true);
   lastWasm = null;
@@ -142,8 +188,8 @@ async function run() {
     const compiled = await workerTask.request(new URL('./compiler-worker.js', import.meta.url), { source: editor.value }, COMPILE_DEADLINE_MS, 'Compilation');
     if (generation !== runGeneration) return;
     if (!compiled.ok) {
-      showDiagnostic(compiled.diagnostics?.[0]);
-      status.textContent = 'Compiler error';
+      const missingFeature = showDiagnostic(compiled.diagnostics?.[0]);
+      status.textContent = missingFeature ? 'Compiler feature unavailable' : 'Compiler error';
       selectTab('diagnostics');
       display('Compilation failed. No WebAssembly artifact was produced.', 'error');
       return;
@@ -162,7 +208,7 @@ async function run() {
       return;
     }
     status.textContent = 'Completed';
-    const actorNote = executed.actors ? ` · ${executed.actors} actor${executed.actors === 1 ? '' : 's'} in dedicated Web Workers` : '';
+    const actorNote = executed.actors ? ` · ${executed.actors} actor${executed.actors === 1 ? '' : 's'} in one tenant Worker` : '';
     display(`${printed}main() → ${executed.value}\n\nCompiled ${lastWasm.byteLength} bytes of Wasm · ${Math.round(performance.now() - start)} ms${actorNote}`, 'success');
   } catch (error) {
     if (generation === runGeneration) {
@@ -177,12 +223,7 @@ async function run() {
  * Browser undo is preserved with native insertText where supported.
  */
 async function formatCode(checkOnly) {
-  if (working || formatting) return;
-  if (PREVIEW_EXAMPLES.has(selector.value)) {
-    status.textContent = 'Preview only';
-    display('Language preview only: the pinned formatter does not support this syntax. Choose Custom + to experiment.');
-    return;
-  }
+  if (working || formatting || sampleLoading || isUntouchedPreview()) return;
   const before = editor.value, start = editor.selectionStart, end = editor.selectionEnd;
   formatting = true;
   formatButton.disabled = checkFormatButton.disabled = runButton.disabled = true;
@@ -236,8 +277,8 @@ async function formatCode(checkOnly) {
     formatting = false;
     editor.readOnly = working;
     selector.disabled = working;
-    runButton.disabled = working || PREVIEW_EXAMPLES.has(selector.value);
-    formatButton.disabled = checkFormatButton.disabled = working || PREVIEW_EXAMPLES.has(selector.value);
+    runButton.disabled = working || sampleLoading || isUntouchedPreview();
+    formatButton.disabled = checkFormatButton.disabled = working || sampleLoading || isUntouchedPreview();
   }
 }
 
@@ -284,15 +325,24 @@ function download() {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 function invalidateArtifact() {
+  updateExampleSupport();
   lastWasm = null;
   downloadButton.disabled = true;
   bytesLabel.textContent = '—';
   diagnostics.textContent = 'No diagnostics.';
   wasmPreview.textContent = 'No compiled artifact yet.';
   if (!working) {
-    status.textContent = 'Source edited';
+    const preview = isUntouchedPreview();
+    runButton.disabled = sampleLoading || preview;
+    formatButton.disabled = checkFormatButton.disabled = sampleLoading || preview;
+    status.textContent = sampleLoading ? 'Loading example' :
+      preview ? 'Syntax preview · compiler support pending' : 'Source edited';
     selectTab('console');
-    display('Source changed. Run to compile.');
+    display(sampleLoading
+      ? 'Loading example. Previous Wasm artifact invalidated; Run is disabled until the source is ready.'
+      : preview
+        ? 'Syntax preview only. This sample is not executable by the pinned browser compiler. No Wasm artifact will be generated. Edit the source to attempt a compile.'
+        : 'Source changed. Run to compile.');
   }
 }
 editor.addEventListener('input', invalidateArtifact);
@@ -307,7 +357,7 @@ status.textContent = 'Loading';
 (async () => {
   const shared = fromHash();
   try { await picker.initialize(shared); } catch (error) { display(`E_HOST: ${error.message}`, 'error'); }
-  status.textContent = 'Ready';
+  status.textContent = isUntouchedPreview() ? 'Syntax preview · compiler support pending' : 'Ready';
   // Only used by the automated, local browser test; does not change normal browsing.
   const smoke = new URLSearchParams(location.search).get('smoke');
   if (smoke === '1') run();

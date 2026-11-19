@@ -1,4 +1,4 @@
-// PREVIEW ONLY: define supervisor, channels and replies need runtime support.
+// SYNTAX PREVIEW ONLY: define supervisor, channels and replies need runtime support.
 // Ping/pong is bounded; the supervisor owns the child and shuts it down.
 define actor Ponger as
   receive(ActorMail<(int, Channel<int>)> mail): void {

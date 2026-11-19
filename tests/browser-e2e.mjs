@@ -95,10 +95,9 @@ try {
   const source=text=>js("(()=>{const e=document.querySelector('#source');e.value="+JSON.stringify(text)+";e.dispatchEvent(new Event('input',{bubbles:true}));})()");
   // examples are fetched .atto files, so wait for the editor to be replaced
   const example=async name=>{
-    // A previous selection can leave "Source changed" in Output while the new
-    // .atto fetch is pending. Wait for the editor's actual input event instead.
-    const selected=await js("(async()=>{const input=document.querySelector('#source');const loaded=new Promise(resolve=>input.addEventListener('input',resolve,{once:true}));const e=document.querySelector('#example');e.value="+JSON.stringify(name)+";if(e.value!=="+JSON.stringify(name)+")throw new Error('Example missing');e.dispatchEvent(new Event('change',{bubbles:true}));await loaded;return e.value;})()");
-    assert.equal(selected,name,'example '+name+' did not finish loading');
+    const expected = await readFile(new URL('../examples/' + name + '.atto', import.meta.url), 'utf8');
+    await js("(()=>{const e=document.querySelector('#example');e.value="+JSON.stringify(name)+";e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+    await poll(async()=> (await view())?.source === expected, 'example '+name+' loaded');
   };
   async function run(kind,expected) {
     await click('run');
@@ -112,6 +111,21 @@ try {
   await cdp('Page.setDownloadBehavior',{behavior:'allow',downloadPath:downloads});
   await navigate(base);
   ok('static site resolves under /play/');
+  const beforeResize = await view();
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '53');
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('role')"), 'separator');
+  await js("(()=>{const s=document.querySelector('#splitter');s.focus();s.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true,cancelable:true}));})()");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '58');
+  await js("document.querySelector('#splitter').dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}))");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '75');
+  await js("document.querySelector('#splitter').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true}))");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '25');
+  await js("document.querySelector('#splitter').dispatchEvent(new KeyboardEvent('keydown',{key:'0',bubbles:true,cancelable:true}))");
+  assert.equal(await js("document.querySelector('#splitter').getAttribute('aria-valuenow')"), '53');
+  assert.equal((await view()).source, beforeResize.source, 'resizing must not mutate program text');
+  assert.equal((await view()).kind, beforeResize.kind, 'resizing must not run code');
+  ok('keyboard-accessible splitter resizes, clamps, resets and preserves source');
+
 
   const unformatted='fnc main() -> int {\nreturn 42;\n}\n';
   await source(unformatted);
@@ -135,25 +149,6 @@ try {
   ok('formatter rejects invalid syntax without overwriting edited source');
   await example('hello');
 
-  // Preview programs must never launch compiler/formatter workers or reuse a prior Wasm artifact.
-  for (const name of ["boolean-operators","generators","async-iterators","tasks-async","match-values","match-types-is","use-using-with","function-pipeline","actor-pipeline","supervisor-mailbox"]) {
-    await example('preview/' + name);
-    const current = await view();
-    assert.match(current.source, /^\/\/ PREVIEW ONLY:/, name);
-    assert.equal(current.runDisabled, true, name + ': Run must be disabled');
-    assert.equal(current.downloadDisabled, true, name + ': no stale guest download');
-    assert.equal(current.bytes, '—', name + ': no compiled artifact');
-    assert.equal(await js("document.querySelector('#example-support').dataset.support"), 'preview');
-    assert.equal(await js("document.querySelector('#format').disabled && document.querySelector('#check-format').disabled"), true);
-  }
-  await js("document.querySelector('#source').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',ctrlKey:true,bubbles:true,cancelable:true}))");
-  assert.match((await view()).output, /Language preview only:/);
-  assert.equal((await view()).downloadDisabled, true);
-  await example('conditions');
-  assert.equal((await view()).runDisabled, false);
-  await run('success', 'main() → 11');
-  ok('all previews are loading-only, keyboard run is guarded, and Conditions still runs in real Wasm');
-
   // Custom program library and syntax mirror, both on the real static origin.
   const customSource='fnc main() -> int { return 20 + 22; }';
   await js("(()=>{const e=document.querySelector('#example');e.value='custom:new';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
@@ -164,6 +159,23 @@ try {
   assert.equal(await js("document.querySelector('#syntax-layer .tok-keyword')?.textContent"),'fnc');
   assert.equal(await js("document.querySelector('#syntax-layer').textContent"),customSource);
   ok('custom + saves a named program in browser localStorage with syntax coloring');
+  await click('export-custom');
+  const exportedJson = await poll(async () => {
+    const files = (await readdir(downloads)).filter(n => n === 'atto-programs-backup.json');
+    if (!files.length) return null;
+    try { return JSON.parse(await readFile(join(downloads,files[0]),'utf8')); }
+    catch { return null; }
+  },'downloaded JSON program backup');
+  assert.equal(exportedJson.format,'atto.playground.programs.v1');
+  assert.equal(exportedJson.programs[0].source,customSource);
+  ok('Export JSON downloads an actual local-only program backup');
+  const importBody = JSON.stringify({format:'atto.playground.programs.v1',
+    programs:[{name:'Imported 7',source:'fnc main() -> int { return 7; }',updatedAt:5}]});
+  await js("(()=>{const f=new File(["+JSON.stringify(importBody)+"],'programs.json',{type:'application/json'});const d=new DataTransfer();d.items.add(f);const e=document.querySelector('#import-file');e.files=d.files;e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  const imported = await poll(async()=>js("JSON.parse(localStorage.getItem('atto.playground.saved-programs.v1')).some(p=>p.name==='Imported 7'&&p.source.includes('return 7'))"),'imported JSON program');
+  assert.equal(imported,true);
+  assert.equal(await js('Array.from(document.querySelectorAll("#example option")).some(o=>o.value==="saved:Imported 7")'),true);
+  ok('Import JSON validates and adds a named program to localStorage');
   await example('primes');
   await js("(()=>{const e=document.querySelector('#example');e.value='saved:Demo 42';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
   assert.equal((await view()).source,customSource);
@@ -215,6 +227,56 @@ try {
   s=await run('success','main() → 10');
   assert.match(s.output,/^2\n3\n5\n7\n11\n13\n17\n19\n23\n29\nmain\(\) → 10/);
   ok('loops example executes with stdout');
+  // Network race: selecting a slow example must revoke old executable bytes
+  // immediately. User edits while fetching must win over the stale response.
+  await example('hello');
+  await run('success','main() → 42');
+  await js(`(()=>{
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = (url, ...args) => String(url).includes('/examples/trap.atto')
+      ? new Promise((resolve, reject) => {
+          window.__releaseDelayedSample = () => {
+            window.fetch = originalFetch;
+            originalFetch(url, ...args).then(resolve, reject);
+          };
+        })
+      : originalFetch(url, ...args);
+  })()`);
+  await js("(()=>{const e=document.querySelector('#example');e.value='trap';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
+  const loading = await poll(async () => {
+    const v = await view();
+    return v?.output?.includes('Loading example.') ? v : null;
+  }, 'loading sample invalidates prior Wasm');
+  assert.equal(loading.runDisabled, true);
+  assert.equal(loading.downloadDisabled, true);
+  assert.equal(loading.bytes, '—');
+  await source('pub fnc main(): int { return 21; }');
+  assert.equal(await js("document.querySelector('#example').value"), 'hello');
+  await js("window.__releaseDelayedSample()");
+  await run('success','main() → 21');
+  assert.equal((await view()).source, 'pub fnc main(): int { return 21; }');
+  ok('delayed sample fetch cannot overwrite user edits or retain stale Wasm');
+
+  // Every staged syntax preview loads, disables Run and leaves no old artifact.
+  for (const [id, needle] of [
+    ['trap','trap "id'], ['result-option','Result<int'],
+    ['channel-bounded','Channel<int>.bounded'], ['channel-probe','try readch'],
+    ['channel-unbounded','Channel<int>.unbounded'],
+    ['rx-observable','rx.Observable'], ['rx-interop','rx.from_channel']
+  ]) {
+    await example(id);
+    const preview = await poll(async () => {
+      const v = await view();
+      return v?.source?.includes(needle) && v.runDisabled ? v : null;
+    }, 'preview '+id+' selected');
+    assert.match(preview.output, /Syntax preview only/);
+    assert.equal(preview.bytes, '—');
+    assert.equal(preview.downloadDisabled, true);
+  }
+  await source('pub fnc main(): int { return 42; }');
+  assert.equal((await view()).runDisabled, false);
+  await run('success','main() → 42');
+  ok('seven syntax previews cannot run or leak Wasm; editing permits real compiler execution');
   await example('error');
   s=await run('error','E_IMMUTABLE');
   assert.equal(s.bytes,'—');assert.equal(s.downloadDisabled,true);
@@ -224,6 +286,15 @@ try {
   await js("document.querySelector('#diagnostics button').click()");
   assert.equal(await js("document.activeElement?.id"),'source');
   ok('compiler errors switch to Diagnostics and jump to the native editor');
+  await source('define class Point as\nend\npub fnc main(): int { return 42; }');
+  s=await run('error', "top-level 'define'");
+  assert.match(s.diagnostics, /deployed compiler does not support top-level define/);
+  assert.equal(s.bytes, '—');
+  assert.equal(s.downloadDisabled, true);
+  assert.equal(await js("document.querySelector('#status').textContent"), 'Compiler feature unavailable');
+  await source('pub fnc main(): int { return 42; }');
+  await run('success', 'main() → 42');
+  ok('unsupported define reports compiler limitation with no artifact, then real Wasm recovers');
   await source('fnc main() -> int { return 2 + ; }');
   s=await run('error','E_SYNTAX');
   assert.equal(s.downloadDisabled,true);
@@ -258,8 +329,8 @@ try {
   await example('actors');
   s=await run('success','main() → 0');
   assert.match(s.output,/^main sent 5 messages\n1\n3\n6\n10\n15\nmain\(\) → 0/);
-  assert.match(s.output,/1 actor in dedicated Web Workers/);
-  ok('define actor: mail is delivered FIFO to actor state in a dedicated Web Worker');
+  assert.match(s.output,/1 actor in one tenant Worker/);
+  ok('define actor: mail is delivered FIFO in one tenant Worker with private Wasm state');
   const counter='define actor Counter as\n  let int total = 0;\n  receive(ActorMail<int> mail): void {\n    self.total = self.total + mail.value;\n    stdio.println(mail.sequence * 1000 + self.total);\n    return;\n  }\nend\n';
   await source(counter+'pub fnc main(): int {\n  val a = spawn Counter();\n  val b = spawn Counter();\n  a.send(1);\n  b.send(10);\n  a.send(2);\n  b.send(20);\n  return 3;\n}');
   s=await run('success','main() → 3');
@@ -267,8 +338,8 @@ try {
     const lines=s.output.split('\nmain()')[0].split('\n').sort();
     assert.deepEqual(lines,['1','10','1003','1030'].sort(),'each actor owns its state and sequence');
   }
-  assert.match(s.output,/2 actors in dedicated Web Workers/);
-  ok('two actors run in separate workers with independent state');
+  assert.match(s.output,/2 actors in one tenant Worker/);
+  ok('two actors run as independent Wasm instances in one Worker');
   await source('define actor W as\n  receive(ActorMail<int> mail): void {\n    stdio.println(mail.value);\n    stdio.println(mail.value * 9223372036854775807);\n    return;\n  }\nend\npub fnc main(): int {\n  val w = spawn W();\n  w.send(7);\n  w.send(8);\n  return 0;\n}');
   s=await run('error','E_PANIC: integer overflow in actor W#0');
   assert.match(s.output,/^7\nE_PANIC: integer overflow in actor W#0/);
@@ -328,7 +399,7 @@ try {
   assert.equal(s.injected,false);
   ok('HTML injection input rejected and not executed');
   assert.ok(requests.some(r=>r.url.includes('/play/public/atto_compiler.wasm')));
-  assert.ok(requests.some(r=>r.url.includes('/play/src/actor-worker.js')),'actor worker script served statically');
+  assert.ok(requests.some(r=>r.url.includes('/play/src/tenant-actor-host.js')),'tenant actor scheduler served statically');
   assert.ok(requests.every(r=>r.method==='GET'),'Unexpected server-side submission of code');
   ok('compiler Wasm served as static GET, no source POST');
   console.log('PASS: '+passed+' real-browser E2E scenarios');
