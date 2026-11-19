@@ -1,0 +1,13 @@
+// Experimental native Wasm/JSPI implementation; browser JSPI required.
+// Task bodies compile to Wasm and return single-owner Future<int> handles.
+pub suspends fnc main(): int {
+  val first = task {
+    return 20;
+  };
+  val second = task {
+    return 22;
+  };
+  val result = await first + await second;
+  stdio.println(result);
+  return result;
+}

@@ -53,7 +53,7 @@ test('real Atto source to Wasm to execution yields 42', async () => {
 test('every bundled example compiles and behaves as documented', async () => {
   const dir = new URL('../examples/', import.meta.url);
   const names = (await readdir(dir)).filter(n => n.endsWith('.atto')).sort();
-  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib-match.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto']);
+  assert.deepEqual(names, ['actors.atto', 'classes.atto', 'conditions.atto', 'enums.atto', 'error.atto', 'fib-match.atto', 'fib.atto', 'floats.atto', 'hello.atto', 'match.atto', 'overflow.atto', 'primes.atto', 'strings.atto', 'suspends-await.atto', 'task-future.atto']);
   const src = n => readFile(new URL(n, dir), 'utf8');
   let r = await run(await src('hello.atto'));
   assert.deepEqual([r.value, r.stdout], [42n, 'Hello from WebAssembly!\n42\n']);
@@ -80,6 +80,65 @@ test('every bundled example compiles and behaves as documented', async () => {
   assert.deepEqual([r.value, r.stdout], [0n, 'Hello, Atto!\ntrue\ntrue\ntrue\nstrings compare by content\n']);
   r = await run(await src('match.atto'));
   assert.deepEqual([r.value, r.stdout], [1n, '-\n-\nFizz\n-\nBuzz\nbool arms\n']);
+  // Actual compiler-produced modules carry the versioned async import marker.
+  for (const asyncFile of ['suspends-await.atto', 'task-future.atto']) {
+    const compiled = compiler.compile(await src(asyncFile));
+    assert.equal(compiled.ok, true, asyncFile + ': ' + JSON.stringify(compiled.diagnostics));
+    assert.equal(WebAssembly.validate(compiled.wasm), true, asyncFile);
+    const module = await WebAssembly.compile(compiled.wasm);
+    const marker = WebAssembly.Module.customSections(module, 'atto.async');
+    assert.equal(marker.length, 1, asyncFile + ' must explicitly declare async ABI');
+    assert.deepEqual(Array.from(new Uint8Array(marker[0])), [2], asyncFile);
+    const imports = WebAssembly.Module.imports(module).map(x => x.module + '.' + x.name);
+    assert.ok(imports.some(x => x.startsWith('atto.') && /sleep_ms|task_start/.test(x)), asyncFile);
+    assert.ok(imports.includes('atto.cooperate'), 'every await must import the mandatory cooperative scheduler handoff');
+    if (asyncFile === 'task-future.atto') {
+      assert.ok(imports.includes('atto.task_await'));
+      assert.ok(WebAssembly.Module.exports(module).some(x => x.name === 'task_invoke' && x.kind === 'function'));
+    }
+  }
+  // `await 42;` parses and type-checks but MUST suspend a real Worker
+  // task turn even when the operand is immediately available.
+  const immediate = compiler.compile('pub suspends fnc main(): int { await 42; return await 42; }');
+  assert.equal(immediate.ok, true, JSON.stringify(immediate.diagnostics));
+  const immediateModule = await WebAssembly.compile(immediate.wasm);
+  const readyMarker = WebAssembly.Module.customSections(immediateModule, 'atto.async');
+  assert.equal(readyMarker.length, 1);
+  assert.deepEqual(Array.from(new Uint8Array(readyMarker[0])), [2]);
+  assert.deepEqual(WebAssembly.Module.imports(immediateModule).map(x => x.name), ['cooperate']);
+  // v1 is unsafe because ready awaits can skip yielding. Downgraded binaries
+  // must fail at the host ABI gate, never silently run with weaker semantics.
+  const downgraded = immediate.wasm.slice();
+  assert.equal(downgraded[downgraded.length - 1], 2, 'async marker version occupies final custom-section byte');
+  downgraded[downgraded.length - 1] = 1;
+  const { asyncGuestInfo } = await import('../src/task-host.js');
+  assert.throws(() => asyncGuestInfo(new WebAssembly.Module(downgraded)), /E_ASYNC/);
+  assert.equal(asyncGuestInfo(immediateModule).enabled, true);
+  const invalidEffect = compiler.compile('pub fnc main(): int { return await 42; }');
+  assert.equal(invalidEffect.ok, false);
+  assert.match(invalidEffect.diagnostics[0].message, /^E_EFFECT/);
+  assert.equal('wasm' in invalidEffect, false);
+  // The parser accepts actor-local suspends receive/mtd only with effect
+  // marks and leaves non-suspending mailbox handlers unchanged.
+  const actorAsyncSource = `define actor A as
+    suspends mtd compute(int n): int { await 42; return n + 1; }
+    suspends receive(ActorMail<int> mail): void {
+      stdio.println(await self.compute(mail.value));
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val a = spawn A();
+    a.send(41);
+    return 0;
+  }`;
+  const actorAsync = compiler.compile(actorAsyncSource);
+  assert.equal(actorAsync.ok, true, JSON.stringify(actorAsync.diagnostics));
+  const actorAsyncModule = await WebAssembly.compile(actorAsync.wasm);
+  assert.deepEqual(Array.from(new Uint8Array(WebAssembly.Module.customSections(actorAsyncModule,'atto.async')[0])),[2]);
+  assert.ok(WebAssembly.Module.imports(actorAsyncModule).some(x => x.name === 'cooperate'));
+  assert.ok(WebAssembly.Module.exports(actorAsyncModule).some(x => x.name === 'actor_receive'));
+  assert.equal(compiler.compile(actorAsyncSource.replace('suspends receive(', 'receive(')).ok,false);
   const actors = compiler.compile(await src('actors.atto'));
   assert.equal(actors.ok, true);
   assert.deepEqual(actorNames(await WebAssembly.compile(actors.wasm)), ['Counter']);

@@ -1,0 +1,12 @@
+// Experimental native Wasm/JSPI implementation; browser JSPI required.
+// rt.sleep(25) yields via approved host timer without blocking a carrier.
+suspends fnc delayedAnswer(): int {
+  await rt.sleep(25);
+  return 42;
+}
+
+pub suspends fnc main(): int {
+  val result = await delayedAnswer();
+  stdio.println(result);
+  return result;
+}

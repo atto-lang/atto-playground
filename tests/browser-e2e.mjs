@@ -148,6 +148,58 @@ try {
   assert.match(originalFib.output, /^0 1 1 2 3 5 8 13 21 34 \nmain\(\) → 144/);
   ok('both Fibonacci dropdown variants compile and execute real Wasm with identical results');
 
+  // Both source files now compile to genuine Wasm with JSPI suspension in
+  // the disposable runner worker. A non-JSPI browser must fail closed.
+  for (const [name, sourceMarker] of [
+    ['suspends-await', 'suspends fnc delayedAnswer()'],
+    ['task-future', 'val first = task {'],
+  ]) {
+    await example(name);
+    await poll(async () => (await view()).source?.includes(sourceMarker), 'async ' + name + ' loaded');
+    const executed = await run('success', 'main() → 42');
+    assert.match(executed.output, /^42\nmain\(\) → 42/, 'real guest output: ' + name);
+    assert.equal(executed.downloadDisabled, false, 'real downloadable Wasm: ' + name);
+    assert.match(executed.bytes, /\d+ bytes/, 'guest binary size: ' + name);
+    assert.match(executed.output, /2 cooperative yield\(s\)/, 'every await yields, including already-resolved task handles: ' + name);
+  }
+  ok('suspends/await and task/Future run as actual compiled Wasm via JSPI');
+  await source('pub suspends fnc main(): int { val first = task { await rt.barrier(2); return 20; }; val second = task { await rt.barrier(2); return 22; }; return await first + await second; }');
+  const barrier = await run('success', 'main() → 42');
+  assert.match(barrier.output, /^main\(\) → 42/);
+  ok('two Wasm tasks reach strict two-party barrier: no sequential/eager simulation');
+  await source('pub suspends fnc main(): int { await 42; return await 42; }');
+  const alreadyReady = await run('success', 'main() → 42');
+  assert.match(alreadyReady.output, /main\(\) → 42/);
+  assert.equal(alreadyReady.downloadDisabled, false);
+  assert.match(alreadyReady.output, /2 cooperative yield\(s\)/, 'two immediate await sites must actually release worker carrier');
+  ok('await 42; always yields twice to the Worker scheduler before returning 42');
+  for (const [kind, program] of [
+    ['bool', 'pub suspends fnc main(): int { val ready = await true; if ready then return 42; fi return 0; }'],
+    ['float', 'pub suspends fnc main(): int { val ready: float = await 1.5; if ready > 1.0 then return 42; fi return 0; }'],
+    ['string', 'pub suspends fnc main(): int { val ready = await "hello"; if ready eq "hello" then return 42; fi return 0; }'],
+    ['nested', 'pub suspends fnc main(): int { return await (await 42); }'],
+  ]) {
+    await source(program);
+    const result = await run('success', 'main() → 42');
+    const count = kind === 'nested' ? 2 : 1;
+    assert.match(result.output, new RegExp(count + ' cooperative yield\\(s\\)'), kind + ' loses value or does not suspend');
+  }
+  ok('bool, float, string and nested immediate awaits all survive genuine JSPI stack suspension');
+  await source('pub define class Worker as pub suspends mtd answer(): int { await 21; return await 42; } end pub suspends fnc main(): int { val worker = new Worker(); return await worker.answer(); }');
+  const classAwait = await run('success', 'main() → 42');
+  assert.match(classAwait.output, /3 cooperative yield\(s\)/, 'suspends mtd and its caller must cooperatively yield');
+  ok('suspends mtd and caller perform three real cooperative yields');
+  await source('pub define class Worker as pub suspends mtd answer(): int { return await 42; } end pub fnc main(): int { val worker = new Worker(); return worker.answer(); }');
+  const classEffect = await run('error', 'E_EFFECT');
+  assert.equal(classEffect.bytes, '—');
+  ok('non-suspends caller of suspends mtd is rejected without guest Wasm');
+  await source('pub fnc main(): int { return await 42; }');
+  const badEffect = await run('error', 'E_EFFECT');
+  assert.equal(badEffect.bytes, '—');
+  assert.equal(badEffect.downloadDisabled, true);
+  ok('await remains an effect error in a non-suspending function');
+
+
   // Custom program library and syntax mirror, both on the real static origin.
   const customSource='fnc main() -> int { return 20 + 22; }';
   await js("(()=>{const e=document.querySelector('#example');e.value='custom:new';e.dispatchEvent(new Event('change',{bubbles:true}));})()");
@@ -263,10 +315,164 @@ try {
   }
   assert.match(s.output,/2 actors in dedicated Web Workers/);
   ok('two actors run in separate workers with independent state');
+  // Actor A suspends twice while retaining its mailbox lease. Actor B has
+  // another Worker and must finish before A's first slow completion.
+  const slowActor = `define actor Slow as
+  let int sum = 0;
+  suspends mtd delay(int n): int {
+    await rt.sleep(175);
+    return n;
+  }
+  suspends receive(ActorMail<int> mail): void {
+    self.sum = self.sum + (await self.delay(mail.value));
+    stdio.println(self.sum);
+    return;
+  }
+end
+define actor Fast as
+  receive(ActorMail<int> mail): void {
+    stdio.println(900);
+    return;
+  }
+end
+pub fnc main(): int {
+  val slow = spawn Slow();
+  val fast = spawn Fast();
+  slow.send(20);
+  slow.send(22);
+  fast.send(1);
+  return 42;
+}`;
+  await source(slowActor);
+  s=await run('success','main() → 42');
+  assert.deepEqual(s.output.split('\nmain()')[0].trim().split('\n'), ['900','20','42'],
+    'other actor must progress, Slow mailbox order and state cannot reenter while suspended');
+  assert.match(s.output,/2 actors in dedicated Web Workers/);
+  ok('suspended actor releases carrier but retains serial mailbox lease; sibling makes progress');
+
+  const actorTask = `define actor Owner as
+  let int total = 0;
+  suspends receive(ActorMail<int> mail): void {
+    val child = task {
+      await rt.sleep(70);
+      return 20;
+    };
+    val result = await child;
+    self.total = self.total + result + mail.value;
+    stdio.println(self.total);
+    return;
+  }
+end
+pub fnc main(): int {
+  val owner = spawn Owner();
+  owner.send(0);
+  owner.send(2);
+  return 42;
+}`;
+  await source(actorTask);
+  s=await run('success','main() → 42');
+  assert.match(s.output,/^20\n42\nmain\(\) → 42/);
+  assert.match(s.output,/1 actor in dedicated Web Workers/);
+  ok('structured child task executes inside actor-owned Worker; no supervisor guest task execution');
+
+  // Real Chromium/JSPI contention: 48 immediate awaits are mandatory
+  // suspension points while this actor's mailbox remains non-reentrant.
+  const cooperativeBurst = `define actor Bursty as
+    let int count = 0;
+    suspends receive(ActorMail<int> mail): void {
+      await 42;
+      self.count = self.count + 1;
+      stdio.println(mail.sequence * 1000 + self.count);
+      return;
+    }
+  end
+  define actor Peer as
+    receive(ActorMail<int> mail): void {
+      stdio.println(900);
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val burst = spawn Bursty();
+    val peer = spawn Peer();
+    for (let i = 0; i < 48; i++) {
+      burst.send(1);
+    }
+    peer.send(1);
+    return 42;
+  }`;
+  await source(cooperativeBurst);
+  s = await run('success','main() → 42');
+  const burstLines=s.output.split('\nmain()')[0].trim().split('\n').map(Number);
+  const cleanBurst=burstLines.filter(x=>x!==900);
+  assert.ok(burstLines.includes(900),'sibling actor completes under burst contention');
+  assert.deepEqual(cleanBurst,Array.from({length:48},(_,i)=>i*1000+i+1),
+    '48 suspended mailboxes must resume in FIFO order without duplication or loss');
+  assert.match(s.output,/2 actors in dedicated Web Workers/);
+  ok('real Chromium: 48 immediate awaits preserve actor FIFO and sibling progress');
+
+  // Real Worker / real JSPI: restart a suspended actor while a sibling
+  // retains a separate Worker. Stale stdout from terminated incarnations
+  // must not be accepted into the new actor generation.
+  const browserRestart=await js("(async()=>{\n  const [{createCompiler},{createActorHost},{actorNames}] = await Promise.all([\n    import('./src/compiler.js'),\n    import('./src/actor-host.js'),\n    import('./src/guest.js'),\n  ]);\n  const response=await fetch('./public/atto_compiler.wasm',{cache:'no-store'});\n  if(!response.ok) throw Error('compiler binary unavailable');\n  const compiler=await createCompiler(new Uint8Array(await response.arrayBuffer()));\n  const result=compiler.compile(\"define actor Survivor as\\n  suspends receive(ActorMail<int> mail): void {\\n    await rt.sleep(500);\\n    stdio.println(mail.value);\\n    return;\\n  }\\nend\\npub fnc main(): int { return 0; }\");\n  if(!result.ok) throw Error('actor compiler failed: '+JSON.stringify(result.diagnostics));\n  const module=await WebAssembly.compile(result.wasm);\n  const out={text:'',truncated:false};\n  const host=createActorHost({\n    wasm:result.wasm,\n    names:actorNames(module),\n    out,\n    workerUrl:new URL('./src/actor-worker.js',location.href),\n  });\n  try {\n    const ref=host.spawn(0),sibling=host.spawn(0);\n    let epoch=0;\n    for(let i=0;i<8;i++) {\n      host.send(ref,BigInt(10000+i));\n      await new Promise(resolve=>setTimeout(resolve,55));\n      if(host.restart(ref)!==ref) throw Error('ActorRef changed after restart');\n      epoch++;\n    }\n    host.send(ref,42n);\n    host.send(sibling,99n);\n    const fault=await host.drain();\n    return {fault,stdout:out.text,count:host.count,epochs:epoch,truncated:out.truncated};\n  } finally {host.close();}\n})()");
+  assert.equal(browserRestart.fault,null,'real Worker restart must complete without stale fault');
+  assert.equal(browserRestart.epochs,8);
+  assert.equal(browserRestart.count,2);
+  assert.equal(browserRestart.truncated,false);
+  assert.deepEqual(browserRestart.stdout.trim().split('\n').sort(),['42','99'],
+    'only newest actor and healthy sibling may produce output after restart');
+  ok('real Chromium: eight suspended actor restart epochs fence stale stdout and preserve sibling');
+
+
+  const staleHandler = `define actor Long as
+  suspends receive(ActorMail<int> mail): void {
+    await rt.sleep(1000);
+    stdio.println(111);
+    return;
+  }
+end
+pub fnc main(): int {
+  val x = spawn Long();
+  x.send(1);
+  return 42;
+}`;
+  await source(staleHandler);
+  await click('run');
+  await poll(async () => (await view())?.runDisabled, 'long actor handler active');
+  await click('stop');
+  await poll(async () => !(await view())?.runDisabled, 'actor handler cancelled');
+  await source('pub fnc main(): int { return 7; }');
+  s=await run('success','main() → 7');
+  assert.doesNotMatch(s.output,/111/, 'cancelled actor output must never appear in later generation');
+  ok('Stop cancels suspended actor and next run fences stale mailbox continuation');
+
   await source('define actor W as\n  receive(ActorMail<int> mail): void {\n    stdio.println(mail.value);\n    stdio.println(mail.value * 9223372036854775807);\n    return;\n  }\nend\npub fnc main(): int {\n  val w = spawn W();\n  w.send(7);\n  w.send(8);\n  return 0;\n}');
   s=await run('error','E_PANIC: integer overflow in actor W#0');
   assert.match(s.output,/^7\nE_PANIC: integer overflow in actor W#0/);
   ok('a panicking actor reports its name and keeps earlier output');
+  const siblingAfterFault = `define actor Broken as
+    receive(ActorMail<int> mail): void {
+      stdio.println(mail.value * 9223372036854775807);
+      return;
+    }
+  end
+  define actor Healthy as
+    receive(ActorMail<int> mail): void {
+      stdio.println(mail.value);
+      return;
+    }
+  end
+  pub fnc main(): int {
+    val bad = spawn Broken();
+    val good = spawn Healthy();
+    bad.send(7);
+    good.send(99);
+    return 0;
+  }`;
+  await source(siblingAfterFault);
+  s=await run('error','E_PANIC: integer overflow in actor Broken#0');
+  assert.ok(s.output.split('\n').includes('99'), 'healthy sibling finishes queued work after another actor traps');
+  ok('actor trap quarantines only failed actor; healthy sibling still drains its mailbox');
   await source('define actor Spin as\n  receive(ActorMail<int> mail): void {\n    loop { }\n  }\nend\npub fnc main(): int {\n  val s = spawn Spin();\n  s.send(1);\n  return 0;\n}');
   s=await run('error','deadline');
   await example('actors');

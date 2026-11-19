@@ -17,7 +17,7 @@ test('conditional Fibonacci remains intact and match variant terminates with end
 test('pattern matching is a distinct selectable built-in and a release asset', async () => {
   const [html, app] = await Promise.all([read('index.html'), read('src/app.js')]);
   assert.match(html, /<option value="fib">Recursion<\/option><option value="fib-match">Fibonacci — pattern matching<\/option>/);
-  assert.match(app, /'hello', 'fib', 'fib-match', 'primes'/);
+  assert.match(app, /'hello', 'fib', 'fib-match', 'suspends-await', 'task-future', 'primes'/);
   assert.ok(PAGES_ASSETS.includes('examples/fib.atto'));
   assert.ok(PAGES_ASSETS.includes('examples/fib-match.atto'));
 });
@@ -28,4 +28,22 @@ test('contract accurately describes executable match and preview limitations', a
   assert.match(contract, /general value-position/);
   assert.doesNotMatch(contract, /- `match`, imports/);
   assert.doesNotMatch(contract, /33 enumerated/);
+});
+
+test('suspends/await and task/future are real Wasm JSPI examples with no source interpreter', async () => {
+  const [html, app, picker, a, b] = await Promise.all([
+    read('index.html'), read('src/app.js'), read('src/program-picker.js'),
+    read('examples/suspends-await.atto'), read('examples/task-future.atto'),
+  ]);
+  assert.match(html, /value="suspends-await">suspends \/ await \(Wasm JSPI\)/);
+  assert.match(html, /value="task-future">task \{ \} \/ Future \(Wasm JSPI\)/);
+  assert.match(app, /'suspends-await', 'task-future'/);
+  assert.doesNotMatch(picker, /Syntax preview — async\/task is not compiled yet/);
+  assert.match(a, /suspends fnc delayedAnswer\(\): int/);
+  assert.match(a, /await rt\.sleep\(25\)/);
+  assert.match(b, /val first = task \{/);
+  assert.match(b, /await first \+ await second/);
+  for (const name of ['suspends-await', 'task-future']) {
+    assert.ok(PAGES_ASSETS.includes('examples/' + name + '.atto'), name + ' must be release-allowlisted');
+  }
 });
