@@ -6,6 +6,8 @@
  * numbers from 0. The host lives inside the runner worker: terminating the
  * runner (Stop or the run deadline) also ends every actor worker it owns.
  */
+import { createLocalActorRegistry } from './local-actor-registry.js';
+import { createLocalActorGroups, createLocalPubSub } from './local-actor-groups.js';
 import { appendCapped } from './guest.js';
 
 export const MAX_ACTORS = 16;
@@ -82,16 +84,16 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     if (actors.length >= MAX_ACTORS) throw new Error(`E_ACTOR_LIMIT: at most ${MAX_ACTORS} actors per run`);
     const ref = actors.length;
     const a = { ref, type, name: names[type], sent: 0, done: 0, ready: false, failed: false, terminated: false, worker: null };
-    a.worker = new WorkerImpl(workerUrl, { type: 'module' });
-    a.worker.onmessage = event => onMessage(a, event.data);
-    a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
-    a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
-    // each actor gets a private copy of the module bytes
     try {
+      a.worker = new WorkerImpl(workerUrl, { type: 'module' });
+      a.worker.onmessage = event => onMessage(a, event.data);
+      a.worker.onerror = event => { event?.preventDefault?.(); fail(a, 'E_ACTOR: worker failed to load or execute'); };
+      a.worker.onmessageerror = () => fail(a, 'E_ACTOR_PROTOCOL: undecodable actor message');
+      // Every actor gets a private copy of its admitted Wasm bytes.
       a.worker.postMessage({ kind: 'init', wasm: new Uint8Array(wasm), type });
     } catch (error) {
-      // An unsuccessful handoff must not orphan the newly allocated Worker.
-      terminate(a);
+      // A failed constructor, callback registration or structured clone must not consume a slot.
+      if (a.worker) terminate(a);
       throw error;
     }
     actors.push(a);
@@ -111,6 +113,20 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
     a.sent++;
   }
 
+  function isLive(ref) {
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    return !closed && !!actor && !actor.failed && !actor.terminated;
+  }
+
+  function retire(ref) {
+    if (!isLive(ref)) return false;
+    const actor = actors[ref];
+    actor.failed = true; // terminal without creating a global run fault
+    terminate(actor);
+    check();
+    return true;
+  }
+
   /** Resolve after all healthy actors drain and every actor has finished
    *  startup (or failed). Preserve the first fault while siblings continue.
    *  Mail comes only from main, so after main returns it is final. */
@@ -127,10 +143,24 @@ export function createActorHost({ wasm, names, out, WorkerImpl = globalThis.Work
   function close() {
     if (closed) return;
     closed = true;
+    groups.close();
+    registry.close();
     for (const a of actors) terminate(a);
     // Explicit shutdown must settle an outstanding drain, never hang callers.
     check();
   }
 
-  return { spawn, send, drain, close, get count() { return actors.length; } };
+  function getOrCreate(type, namespace, applicationKey) {
+    const ref = registry.get_or_create({
+      namespace, actor_type: type, application_key: applicationKey
+    });
+    // Exact physical incarnation, not a virtual ref, for existing i32 ABI.
+    return registry.slot_for(ref);
+  }
+
+  const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
+  const groups = createLocalActorGroups({ registry });
+  const pubsub = createLocalPubSub(groups);
+  return { spawn, send, getOrCreate, drain, close, isLive, retire, registry, groups, pubsub,
+    get count() { return actors.length; } };
 }

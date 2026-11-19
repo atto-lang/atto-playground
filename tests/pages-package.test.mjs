@@ -123,6 +123,8 @@ test('every local browser module import belongs to the published asset allowlist
   for (const essential of [
     'src/actor-abi-version.js',
     'src/tenant-actor-host.js',
+    'src/local-actor-registry.js',
+    'src/local-actor-groups.js',
     'src/wasm-memory-admission.js',
     'src/guest-import-abi.js',
   ]) {

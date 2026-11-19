@@ -86,6 +86,46 @@ The Pages workflow is **not an auto-publisher**: deployment requires `workflow_d
 
 The earlier M0 guest restriction requiring exactly the type/function/export/code sections cannot apply to v2: `atto.browser.guest.v2` intentionally permits bounded stdout imports, memory for string literals and objects, and the bounded actor capabilities. The v2 guest runner instead enforces `guestImports()`'s allowlist, an i64 `main` entrypoint, a 1 MiB module-size ceiling, bounded output and a hard worker deadline.
 
+## Syntax previews (not part of the pinned compiler)
+
+The dropdown separates executable examples from **syntax previews**. These seven
+`.atto` files are educational design sketches, not proven compilable programs.
+The UI disables Run for the original preview text, and does not return a Wasm
+artifact. Editing a preview unlocks Run so the user can experiment with the
+real compiler; unsupported constructs still fail closed with an `E_*` diagnostic.
+
+| Preview | Demonstrates | Status |
+| --- | --- | --- |
+| `trap.atto` | Proposed explicit fatal trap; not interchangeable with `Err` | Keyword and fault boundary semantics need compiler/runtime specification |
+| `result-option.atto` | `Result<T,E>`, `Option<T>`, `Ok`, `Err`, `Some`, `None` | Generic ADTs and constructors not lowered |
+| `channel-bounded.atto` | Bounded mailbox capacity and suspending backpressure | Channel constructors and scheduler integration not lowered |
+| `channel-probe.atto` | `try readch` immediate probe vs `nb readch` future | Grammar has wait modes; browser compiler does not |
+| `channel-unbounded.atto` | Unbounded buffer, waiting receiver, quotas | Unbounded != infinite memory or nonblocking receive |
+| `rx-observable.atto` | Observable map/filter/take and subscription lifetime | Proposed `rx` stdlib API, not validated language ABI |
+| `rx-interop.atto` | Observable↔channel adapters, Task/Future, `suspends`/`await` | Proposed adapter names; cancellation, errors and ownership need specification |
+
+The reference grammar describes `readch`/`writech` as suspending,
+`nb` variants as future-returning, and `try` as immediate one-shot probes.
+Unbounded channel sends avoid waiting *for a fixed-capacity slot*, but receive
+can still suspend while empty; memory quotas and cancellation still apply.
+An Rx subscription must be explicitly cancelled/disposed. Observables are
+push streams, not directly awaitable: an adapter such as `first_task()` must
+bridge to a future and define completion, error and cancellation behavior.
+
+**Release gate:** do not relabel these samples executable until an approved,
+pinned compiler and browser runtime pass real guest execution tests. Packaging
+a text sample does not authorize publication of a new compiler binary.
+
+## Explicit trap panic code (future compiler compatibility)
+
+The guest contract reserves `panic_code=4` for an explicit, terminal
+`trap;` statement. The browser host renders this as
+`E_PANIC: explicit terminal trap`. A trap is not an `Err` value
+and does not become catchable through `Result`. This compatibility
+mapping does **not** imply the currently pinned public compiler can emit
+this code; the proposed compiler implementation requires its own
+review, native/Wasm tests, and authorized binary promotion.
+
 
 ## Tenant memory admission (v2)
 

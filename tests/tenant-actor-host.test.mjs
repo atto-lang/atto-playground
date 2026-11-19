@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTenantActorHost } from '../src/tenant-actor-host.js';
+import { guestImports } from '../src/guest.js';
 
 // This constructs a real, minimal core-Wasm actor module; no stubbed guest
 // instances or JavaScript reimplementation of Wasm actor memory.
@@ -99,6 +100,7 @@ test('Wasm trap kills only its actor; healthy siblings finish', async () => {
   const fault = await host.drain();
   assert.match(fault, /E_RUNTIME: .* in actor Counter#0/);
   assert.equal(out.text, '112'); // healthy actor processed both messages
+  assert.equal(host.memoryBytes, 65536, 'failed actor releases its Wasm memory while sibling remains');
   host.close();
 });
 
@@ -141,4 +143,136 @@ test('closing during a yield cancels queued Wasm mail instead of resuming dead i
   assert.equal(await draining, 'E_ACTOR: tenant closed');
   assert.equal(host.memoryBytes, 0);
   assert.throws(() => host.send(a, 1n), /tenant closed/);
+});
+
+test('tenant Wasm actor host uses keyed refs and rejects stale incarnations', async () => {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const key = { namespace: 'vhost/example', actor_type: 0, application_key: 'queue/orders' };
+  const virtual = host.registry.ref_for(key);
+  assert.equal(host.registry.lookup(virtual), null, 'obtaining a virtual key never spawns');
+  const original = host.registry.register(virtual);
+  assert.equal(host.registry.get_or_create(virtual), original.ref);
+  host.registry.send(original.ref, 5n);
+  // Explicit retirement must discard admitted-but-unprocessed messages.
+  assert.equal(host.registry.unregister(virtual, original.token), true);
+  assert.equal(host.memoryBytes, 0);
+  const successor = host.registry.register(virtual);
+  assert.ok(successor.ref.incarnation > original.ref.incarnation);
+  assert.equal(host.registry.unregister(virtual, original.token), false);
+  assert.throws(() => host.registry.send(original.ref, 6n), /E_ACTOR_REF_STALE/);
+  host.registry.send(successor.ref, 9n);
+  host.registry.send(successor.ref, 10n);
+  assert.equal(await host.drain(), null);
+  assert.equal(out.text, '12', 'only the new guest Wasm instance processed two messages');
+  assert.equal(host.memoryBytes, 65536, 'retired actor memory was released');
+  host.close();
+  assert.equal(host.memoryBytes, 0);
+});
+
+test('keyed tenant host refuses registration after drain without leaking a guest', async () => {
+  const host = createTenantActorHost({
+    module: new WebAssembly.Module(actorFixture()), names: ['Counter'],
+    out: { text: '', truncated: false }
+  });
+  const key = { namespace: 'tenant-x', actor_type: 0, application_key: 'q' };
+  assert.equal(await host.drain(), null);
+  assert.throws(() => host.registry.get_or_create(key), /spawn admission closed/);
+  assert.equal(host.registry.lookup(key), null);
+  assert.equal(host.registry.size, 0);
+  assert.equal(host.memoryBytes, 0);
+  host.close();
+});
+
+test('keyed failed tenant guest releases memory and can be replaced at new incarnation', async () => {
+  const host = createTenantActorHost({
+    module: new WebAssembly.Module(actorFixture()), names: ['Counter'],
+    out: { text: '', truncated: false }
+  });
+  const key = { namespace: 'tenant-x', actor_type: 0, application_key: 'q' };
+  const first = host.registry.get_or_create(key);
+  host.registry.send(first, 7n); // guest traps, quarantines only its own instance
+  const fault = await host.drain();
+  assert.match(fault, /E_RUNTIME: .* in actor Counter#0/);
+  assert.equal(host.memoryBytes, 0, 'failed Wasm allocation was reclaimed');
+  assert.equal(host.registry.lookup(key), null);
+  // Drain closes admission permanently in the v2 tenant host. No silent restart.
+  assert.throws(() => host.registry.get_or_create(key), /spawn admission closed/);
+  assert.throws(() => host.registry.send(first, 2n), /E_ACTOR_REF_STALE/);
+  host.close();
+});
+
+function keyedGuestBridge() {
+  const module = new WebAssembly.Module(actorFixture());
+  const out = { text: '', truncated: false };
+  const host = createTenantActorHost({ module, names: ['Counter'], out });
+  const bridge = guestImports(module, out, host);
+  const main = new WebAssembly.Instance(module, bridge.imports);
+  bridge.bind(main);
+  const memory = new Uint8Array(main.exports.memory.buffer);
+  const bytes = new TextEncoder();
+  const put = (text, offset) => {
+    const data = bytes.encode(text);
+    memory.set(data, offset);
+    return (BigInt(offset) << 32n) | BigInt(data.length);
+  };
+  return { host, out, bridge: bridge.imports.atto, memory, put };
+}
+
+test('guest import uses keyed registry to reuse one real tenant Wasm actor activation', async () => {
+  const { host, out, bridge, put } = keyedGuestBridge();
+  const namespace = put('vhost', 64), key = put('payments', 96);
+  const a = bridge.actor_get_or_create(0, namespace, key);
+  const b = bridge.actor_get_or_create(0, namespace, key);
+  assert.equal(a, b);
+  assert.equal(host.registry.size, 1);
+  assert.equal(host.count, 1);
+  bridge.actor_send(a, 40n);
+  bridge.actor_send(b, 2n);
+  assert.equal(await host.drain(), null);
+  assert.equal(out.text, '12', 'same Wasm instance increments its private counter twice');
+  host.close();
+});
+
+test('guest import namespace and application keys have unambiguous identities', async () => {
+  const { host, bridge, put } = keyedGuestBridge();
+  const a = bridge.actor_get_or_create(0, put('a:b', 64), put('c', 96));
+  const b = bridge.actor_get_or_create(0, put('a', 128), put('b:c', 160));
+  assert.notEqual(a, b);
+  assert.equal(host.registry.size, 2);
+  assert.equal(host.count, 2);
+  host.close();
+});
+
+test('guest import rejects malformed pointer and length before activation', () => {
+  const { host, bridge, put, memory } = keyedGuestBridge();
+  const namespace = put('tenant', 64), key = put('q', 96);
+  const encode = (offset, size) => (BigInt(offset) << 32n) | BigInt(size);
+  memory[150] = 0xff;
+  const invalid = [
+    [encode(65530, 30), key, /E_ACTOR_KEY/],
+    [namespace, encode(500000, 1), /E_ACTOR_KEY/],
+    [encode(64, 0), key, /E_ACTOR_KEY/],
+    [namespace, encode(1000, 4097), /E_ACTOR_KEY/],
+    [namespace, encode(150, 1), /E_ACTOR_KEY/],
+  ];
+  for (const [ns, k, reason] of invalid) {
+    assert.throws(() => bridge.actor_get_or_create(0, ns, k), reason);
+  }
+  assert.throws(() => bridge.actor_get_or_create(5, namespace, key), /unknown actor type|E_ACTOR_KEY/);
+  assert.equal(host.count, 0, 'no malformed key may allocate an actor');
+  host.close();
+});
+
+test('guest import fails closed after drain and with no actor capability', async () => {
+  const { host, bridge, put } = keyedGuestBridge();
+  const namespace = put('tenant', 64), key = put('q', 96);
+  assert.equal(await host.drain(), null);
+  assert.throws(() => bridge.actor_get_or_create(0, namespace, key), /spawn admission closed/);
+  assert.equal(host.count, 0);
+  host.close();
+  const module = new WebAssembly.Module(actorFixture());
+  const unprivileged = guestImports(module, { text: '', truncated: false });
+  assert.throws(() => unprivileged.imports.atto.actor_get_or_create(0, namespace, key), /E_ACTOR/);
 });

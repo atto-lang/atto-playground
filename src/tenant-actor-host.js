@@ -10,6 +10,8 @@
  * There is NO preemption inside a guest call yet. The outer runner deadline
  * must terminate the tenant worker if a guest loops forever.
  */
+import { createLocalActorRegistry } from './local-actor-registry.js';
+import { createLocalActorGroups, createLocalPubSub } from './local-actor-groups.js';
 import { appendCapped, describePanic, guestImports } from './guest.js';
 import { MAX_ACTORS, MAX_MAILBOX } from './actor-host.js';
 
@@ -45,6 +47,10 @@ export function createTenantActorHost({ module, names, out }) {
     }
     a.failed = true;
     flush(a);
+    // A trapped/failed actor may have allocated guest linear memory.
+    // Never retain it as an inactive keyed activation.
+    a.mailbox.length = 0;
+    a.instance = null;
   }
   function checkMemory(a) {
     const memory = a.instance?.exports.memory;
@@ -103,6 +109,23 @@ export function createTenantActorHost({ module, names, out }) {
     a.sent++;
   }
 
+  function isLive(ref) {
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    return !closed && !!actor && !actor.failed && actor.instance !== null;
+  }
+
+  function retire(ref) {
+    const actor = Number.isInteger(ref) ? actors[ref] : undefined;
+    if (closed || !actor) return false;
+    const wasLive = !actor.failed && actor.instance !== null;
+    actor.failed = true;
+    actor.mailbox.length = 0;
+    actor.instance = null;
+    actor.output.text = '';
+    actor.output.truncated = false;
+    return wasLive;
+  }
+
   /** Round-robin, one mailbox entry per actor per sweep. This yields the JS
    * event loop between bounded groups of completed guest calls, never within
    * a guest Wasm invocation. Actor-to-actor sends are denied by guestImports.
@@ -147,6 +170,8 @@ export function createTenantActorHost({ module, names, out }) {
 
   function close() {
     closed = true;
+    groups.close();
+    registry.close();
     for (const a of actors) {
       a.mailbox.length = 0;
       a.instance = null;
@@ -154,8 +179,19 @@ export function createTenantActorHost({ module, names, out }) {
     }
   }
 
+  function getOrCreate(type, namespace, applicationKey) {
+    const ref = registry.get_or_create({
+      namespace, actor_type: type, application_key: applicationKey
+    });
+    // Exact physical incarnation, not a virtual ref, for existing i32 ABI.
+    return registry.slot_for(ref);
+  }
+
+  const registry = createLocalActorRegistry({ names, spawn, send, isLive, retire });
+  const groups = createLocalActorGroups({ registry });
+  const pubsub = createLocalPubSub(groups);
   return {
-    spawn, send, drain, close,
+    spawn, send, getOrCreate, drain, close, isLive, retire, registry, groups, pubsub,
     get count() { return actors.length; },
     get memoryBytes() {
       return actors.reduce((sum, a) => sum + (a.instance?.exports.memory?.buffer.byteLength ?? 0), 0);
