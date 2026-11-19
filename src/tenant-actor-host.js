@@ -53,6 +53,10 @@ export function createTenantActorHost({ module, names, out }) {
     const lost = a.mailbox.length - a.head;
     pendingMessages -= lost;
     droppedMessages += lost;
+    for (let i = a.head; i < a.mailbox.length; i++) {
+      const item = a.mailbox[i];
+      if (item?.mailbox_claim) jobs.observe_job(item.mailbox_claim, a.ref, 'lost');
+    }
     flush(a);
     // A trapped/failed actor may have allocated guest linear memory.
     // Never retain it as an inactive keyed activation.
@@ -101,7 +105,7 @@ export function createTenantActorHost({ module, names, out }) {
     return a.ref;
   }
 
-  function send(ref, value) {
+  function send(ref, value, mailbox_claim = undefined) {
     if (closed) throw new Error('E_ACTOR: tenant closed');
     if (admissionClosed) throw new Error('E_ACTOR: mailbox admission closed after main returned');
     const a = Number.isInteger(ref) ? actors[ref] : undefined;
@@ -116,7 +120,8 @@ export function createTenantActorHost({ module, names, out }) {
     if (pendingMessages >= MAX_TOTAL_PENDING_MESSAGES) {
       throw new Error('E_ACTOR_TOTAL_MAILBOX: aggregate pending-message budget exceeded');
     }
-    a.mailbox.push({ value, sequence: a.sent });
+    if (mailbox_claim !== undefined) jobs.bind_mailbox(mailbox_claim, a.ref);
+    a.mailbox.push({ value, sequence: a.sent, mailbox_claim });
     a.sent++;
     pendingMessages++;
   }
@@ -134,6 +139,10 @@ export function createTenantActorHost({ module, names, out }) {
     const lost = actor.mailbox.length - actor.head;
     pendingMessages -= lost;
     droppedMessages += lost;
+    for (let i = actor.head; i < actor.mailbox.length; i++) {
+      const item = actor.mailbox[i];
+      if (item?.mailbox_claim) jobs.observe_job(item.mailbox_claim, actor.ref, 'lost');
+    }
     actor.mailbox.length = 0;
     actor.head = 0;
     actor.instance = null;
@@ -163,7 +172,7 @@ export function createTenantActorHost({ module, names, out }) {
           if (a.failed || a.head >= a.mailbox.length) continue;
           progressed = true;
           const offset = a.head++;
-          const { value, sequence } = a.mailbox[offset];
+          const { value, sequence, mailbox_claim } = a.mailbox[offset];
           a.mailbox[offset] = null; // never retain delivered guest values
           pendingMessages--;
           if (a.head === a.mailbox.length) {
@@ -171,10 +180,15 @@ export function createTenantActorHost({ module, names, out }) {
             a.head = 0;
           }
           try {
+            if (mailbox_claim) jobs.observe_job(mailbox_claim, a.ref, 'started');
             a.instance.exports.actor_receive(a.type, value, BigInt(sequence));
             checkMemory(a);
             flush(a);
+            if (mailbox_claim) jobs.observe_job(mailbox_claim, a.ref, 'returned');
           } catch (error) {
+            // A trap may occur after side effects. The job must remain
+            // indeterminate, while healthy actors continue draining.
+            if (mailbox_claim) jobs.observe_job(mailbox_claim, a.ref, 'lost');
             failed(a, error);
             continue;
           }
