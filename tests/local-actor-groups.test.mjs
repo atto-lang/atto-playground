@@ -174,3 +174,102 @@ test('group job IDs and payloads are checked before any mailbox admission', () =
   }
   assert.deepEqual(f.deliveries,[]);
 });
+
+
+test('1,024 independently keyed group jobs each attempt exactly one mailbox send', () => {
+  const f=fixture(), k=group('routing'), refs=Array.from({length:32},()=>f.registry.make());
+  for(const ref of refs) f.groups.join(k,ref);
+  const seen=new Map();
+  for(let i=0;i<1024;i++) {
+    const job_id='job-'+i;
+    const chosen=f.groups.dispatch_one(k,job_id,BigInt(i)).ref;
+    assert.ok(refs.includes(chosen));
+    seen.set(job_id,chosen);
+  }
+  assert.equal(f.deliveries.length,1024);
+  for(let i=0;i<1024;i++) {
+    assert.equal(f.groups.dispatch_one(k,'job-'+i,0n).ref,seen.get('job-'+i));
+  }
+  assert.equal(f.deliveries.length,2048,'group dispatcher is not itself a dedup ledger');
+  assert.equal(f.groups.membership_count,32);
+});
+
+test('rendezvous assignment remains stable when joining the same member repeatedly', () => {
+  const f=fixture(), k=group('routing'), refs=Array.from({length:4},()=>f.registry.make());
+  for(const ref of refs) f.groups.join(k,ref);
+  const chosen=f.groups.dispatch_one(k,'stable-id',1n).ref;
+  for(const ref of refs) f.groups.join(k,ref);
+  for(let i=0;i<64;i++)
+    assert.equal(f.groups.dispatch_one(k,'stable-id',BigInt(i)).ref,chosen);
+  assert.equal(f.groups.membership_count,4);
+});
+
+test('retiring the selected incarnation only changes future selection and removes exact ref', () => {
+  const f=fixture(), k=group('routing'), refs=Array.from({length:3},()=>f.registry.make());
+  refs.forEach(ref=>f.groups.join(k,ref));
+  const old=f.groups.dispatch_one(k,'same-key',1n).ref;
+  f.registry.retire(old);
+  assert.equal(f.groups.actor_stopped(old),1);
+  const fresh=f.registry.make();
+  f.groups.join(k,fresh);
+  assert.equal(f.groups.actor_stopped(old),0);
+  assert.ok(!f.groups.members(k).includes(old));
+  assert.ok(f.groups.members(k).includes(fresh));
+  assert.ok(f.groups.dispatch_one(k,'same-key',2n).ref !== old);
+});
+
+test('group dispatcher rejects invalid physical slots before any mailbox send', () => {
+  const ref=Object.freeze({kind:'ActorRef',namespace:'tenant-a',actor_type:0});
+  let calls=0;
+  const registry={
+    slot_for() { return calls++ ? -1 : 0; },
+    send() {assert.fail('invalid slot cannot admit');}
+  };
+  const groups=createLocalActorGroups({registry});
+  groups.join(group(),ref);
+  assert.throws(()=>groups.dispatch_one(group(),'job',1n),/E_ACTOR_GROUP_REF/);
+  assert.equal(groups.membership_count,1);
+});
+
+test('group dispatch rejects reentrant dispatch even with a different group ID', () => {
+  const f=fixture(), a=f.registry.make(), b=f.registry.make();
+  f.groups.join(group('primary'),a);
+  f.groups.join(group('secondary'),b);
+  f.registry.send=()=>{
+    assert.throws(()=>f.groups.dispatch_one(group('secondary'),'nested',2n),/E_ACTOR_GROUP_REENTRANT/);
+  };
+  assert.equal(f.groups.dispatch_one(group('primary'),'outer',1n).ref,a);
+});
+
+test('one-job delivery respects namespace, actor type, and group key boundaries', () => {
+  const f=fixture();
+  const a=f.registry.make('tenant-a',0), b=f.registry.make('tenant-b',0),
+    c=f.registry.make('tenant-a',1);
+  f.groups.join(group('jobs','tenant-a',0),a);
+  f.groups.join(group('jobs','tenant-b',0),b);
+  f.groups.join(group('jobs','tenant-a',1),c);
+  assert.equal(f.groups.dispatch_one(group('jobs','tenant-a',0),'same-id',1n).ref,a);
+  assert.equal(f.groups.dispatch_one(group('jobs','tenant-b',0),'same-id',1n).ref,b);
+  assert.equal(f.groups.dispatch_one(group('jobs','tenant-a',1),'same-id',1n).ref,c);
+  assert.deepEqual(f.deliveries,[[0,1n],[1,1n],[2,1n]]);
+});
+
+test('group routing accepts signed i64 boundaries but no values outside', () => {
+  const f=fixture(), ref=f.registry.make(), k=group('range');
+  f.groups.join(k,ref);
+  const allowed=[-(1n<<63n),0n,(1n<<63n)-1n];
+  for(const [i,v] of allowed.entries()) f.groups.dispatch_one(k,'id-'+i,v);
+  assert.deepEqual(f.deliveries,allowed.map(v=>[0,v]));
+  for(const v of [-(1n<<63n)-1n,1n<<63n,0,1.5,'0',null])
+    assert.throws(()=>f.groups.dispatch_one(k,'bad',v),/E_ACTOR_GROUP_PAYLOAD/);
+  assert.equal(f.deliveries.length,3);
+});
+
+test('group close during registry send never returns a successful admission receipt', () => {
+  const f=fixture(), a=f.registry.make(), k=group('closing');
+  f.groups.join(k,a);
+  f.registry.send=()=>f.groups.close();
+  assert.throws(()=>f.groups.dispatch_one(k,'job',1n),/E_ACTOR_GROUP_CLOSED/);
+  assert.equal(f.groups.membership_count,0);
+  assert.throws(()=>f.groups.dispatch_one(k,'job',1n),/E_ACTOR_GROUP_CLOSED/);
+});
