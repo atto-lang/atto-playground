@@ -202,7 +202,7 @@ export function createLocalActorGroups({registry, max_groups = 128,
       if (existing) prune(key, existing);
       const current = groups.get(key);
       if (!current || !current.members.size) {
-        throw new Error('E_ACTOR_GROUP_EMPTY: no live workers registered');
+        return null; // No mailbox send was attempted; caller may retry when members join.
       }
       let selected = null, best = -1n, selectedSlot = Infinity;
       for (const ref of current.members.keys()) {
