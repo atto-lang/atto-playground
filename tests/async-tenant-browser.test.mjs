@@ -114,6 +114,54 @@ try {
   assert.equal(result.cooperativeYields,1);
   assert.equal(result.actors,0);
   console.log('PASS: real Chromium JSPI cooperate yields once and returns 42 on isolated tenant Worker');
+  // Native WebAssembly JSPI cancellation oracle, separate from compiler .atto.
+  // This guest actually calls atto.sleep_ms(1000) and suspends a Wasm stack.
+  // Closing the host must withdraw its timer, wake the continuation and wait
+  // for quiescence, rather than report cancellation from the Future handle alone.
+  const cancelled = await evaluate(`(async()=>{
+    const {createAsyncTaskHost}=await import('/play/src/task-host.js');
+    const leb=n=>{const a=[];do{let b=n&127;n>>>=7;a.push(n?b|128:b);}while(n);return a;};
+    const name=s=>{const b=[...new TextEncoder().encode(s)];return [...leb(b.length),...b];};
+    const sec=(id,b)=>[id,...leb(b.length),...b];
+    const wasm=new Uint8Array([
+      0,97,115,109,1,0,0,0,
+      // type0: (i64)->i64, type1: ()->i64
+      ...sec(1,[2,0x60,1,0x7e,1,0x7e,0x60,0,1,0x7e]),
+      ...sec(2,[1,...name('atto'),...name('sleep_ms'),0,0]),
+      ...sec(3,[1,1]),
+      ...sec(7,[1,...name('main'),0,1]),
+      // main: i64.const 1000; call imported sleep_ms; drop; i64.const 42
+      ...sec(10,[1,9,0,0x42,0xe8,0x07,0x10,0,0x1a,0x42,42,0x0b]),
+      ...sec(0,[...name('atto.async'),2])
+    ]);
+    if(!WebAssembly.validate(wasm))throw Error('invalid cancellable core Wasm fixture');
+    const module=new WebAssembly.Module(wasm);
+    const host=createAsyncTaskHost(module);
+    const instance=new WebAssembly.Instance(module,{atto:host.imports});
+    host.bind(instance);
+    const running=host.runMain().then(
+      value=>({status:'fulfilled',value:String(value)}),
+      error=>({status:'rejected',message:String(error.message)})
+    );
+    await new Promise(resolve=>setTimeout(resolve,20));
+    const before={
+      pending:host.pendingHostWaitCount,
+      quiescent:host.physicallyQuiescent
+    };
+    await host.close();
+    const outcome=await running;
+    return {before,outcome,pending:host.pendingHostWaitCount,
+      active:host.activeTaskCount,quiescent:host.physicallyQuiescent};
+  })()`);
+  assert.equal(cancelled.before.pending,1,'real JSPI sleep must be pending at cancellation');
+  assert.equal(cancelled.before.quiescent,false,'pending Wasm continuation cannot be retired');
+  assert.equal(cancelled.outcome.status,'rejected','cancellation cannot synthesize an int result');
+  assert.match(cancelled.outcome.message,/E_ASYNC: task scope cancelled/);
+  assert.equal(cancelled.pending,0,'native sleep timeout must be removed');
+  assert.equal(cancelled.active,0);
+  assert.equal(cancelled.quiescent,true,'scope must settle real JSPI continuation');
+  console.log('PASS: real Chromium JSPI timed guest cancellation withdraws callback and retires continuation');
+
 } finally {
   try {socket?.close();} catch {}
   if(chrome&&chrome.exitCode===null){
