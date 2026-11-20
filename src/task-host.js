@@ -120,7 +120,11 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   const task_start = index => {
     ensureOpen();
     if (!Number.isInteger(index) || index < 0 || index > 1024) throw Error('E_ASYNC: invalid task index');
-    if (jobs.size >= maxTasks || next === 0x7fffffff) throw Error('E_ASYNC: task quota exhausted');
+    // Consuming a Future handle does NOT retire its running continuation.
+    // Bound both unconsumed handles and physically active guest tasks.
+    if (jobs.size >= maxTasks || activeTasks.size >= maxTasks || next === 0x7fffffff) {
+      throw Error('E_ASYNC: task quota exhausted');
+    }
     const handle = next++;
     const task = { consumed: false };
     task.promise = new Promise((resolve, reject) => {
