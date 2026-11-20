@@ -111,6 +111,69 @@ test('async/2 host cancellation retains active continuations until settlement', 
       assert.equal(h.physicallyQuiescent,true);
     });
 
+    await t.test('scope cancellation withdraws pending sleep timer immediately', async () => {
+      const h = host();
+      h.bind({exports:{main:async()=>42n,task_invoke:async()=>42n}});
+      const sleeper = h.imports.sleep_ms(1000n);
+      assert.equal(h.pendingHostWaitCount,1);
+      assert.equal(h.physicallyQuiescent,false);
+      const drained = h.close();
+      await assert.rejects(sleeper,/E_ASYNC: task scope cancelled/);
+      await drained;
+      assert.equal(h.pendingHostWaitCount,0);
+      assert.equal(h.physicallyQuiescent,true);
+    });
+
+    await t.test('cancelled cooperation does not resume or consume yield budget', async () => {
+      const h = host();
+      h.bind({exports:{main:async()=>42n,task_invoke:async()=>42n}});
+      const pending = h.imports.cooperate();
+      assert.equal(h.pendingHostWaitCount,1);
+      const drained = h.close();
+      await assert.rejects(pending,/E_ASYNC: task scope cancelled/);
+      await drained;
+      assert.equal(h.cooperativeYields,0);
+      assert.equal(h.pendingHostWaitCount,0);
+    });
+
+    await t.test('unmatched and matched barriers keep live callbacks accounted', async () => {
+      const h = host();
+      h.bind({exports:{main:async()=>42n,task_invoke:async()=>42n}});
+      const lone = h.imports.barrier(2n);
+      assert.equal(h.pendingHostWaitCount,1);
+      assert.equal(h.physicallyQuiescent,false);
+      const another = h.imports.barrier(2n);
+      assert.equal(h.pendingHostWaitCount,2);
+      const closed = h.close();
+      const outcomes = await Promise.allSettled([lone,another]);
+      await closed;
+      assert.deepEqual(outcomes.map(x=>x.status),['rejected','rejected']);
+      assert.equal(h.pendingHostWaitCount,0);
+      assert.equal(h.physicallyQuiescent,true);
+    });
+
+    await t.test('main suspended in timer wakes and drains promptly after close', async () => {
+      const h = host();
+      let started;
+      const running = new Promise(resolve => { started = resolve; });
+      h.bind({exports:{
+        main: async () => {
+          const wait = h.imports.sleep_ms(1000n);
+          started();
+          await wait;
+          return 42n;
+        },
+        task_invoke:async()=>42n,
+      }});
+      const finishing = h.runMain();
+      await running;
+      assert.equal(h.pendingHostWaitCount,1);
+      assert.equal(h.physicallyQuiescent,false);
+      await h.close();
+      await assert.rejects(finishing,/E_ASYNC: task scope cancelled/);
+      assert.equal(h.physicallyQuiescent,true);
+    });
+
     await t.test('awaited child returns int and retires before successful main', async () => {
       const h = host();
       h.bind({exports:{
