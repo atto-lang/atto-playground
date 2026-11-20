@@ -174,6 +174,39 @@ test('async/2 host cancellation retains active continuations until settlement', 
       assert.equal(h.physicallyQuiescent,true);
     });
 
+    await t.test('cancellation wins over a delayed successful main result', async () => {
+      let release;
+      const pending = new Promise(resolve => { release = resolve; });
+      const h = host();
+      h.bind({exports:{
+        main: async () => { await pending; return 42n; },
+        task_invoke: async () => 42n,
+      }});
+      const result = h.runMain();
+      assert.equal(h.physicallyQuiescent,false);
+      const cleanup = h.close();
+      release();
+      await assert.rejects(result,/E_ASYNC: task scope cancelled/);
+      await cleanup;
+      assert.equal(h.physicallyQuiescent,true);
+    });
+
+    await t.test('matched barrier callback counts as pending until microtask drains', async () => {
+      const h = host();
+      h.bind({exports:{main:async()=>42n,task_invoke:async()=>42n}});
+      const first = h.imports.barrier(2n);
+      const second = h.imports.barrier(2n);
+      const cleanup = h.close();
+      assert.equal(h.pendingHostWaitCount,1,'scheduled barrier microtask remains outstanding');
+      assert.equal(h.physicallyQuiescent,false,
+        'rejecting waiter promises is not physical callback retirement');
+      assert.deepEqual((await Promise.allSettled([first,second])).map(x=>x.status),
+        ['rejected','rejected']);
+      await cleanup;
+      assert.equal(h.pendingHostWaitCount,0);
+      assert.equal(h.physicallyQuiescent,true);
+    });
+
     await t.test('awaited child returns int and retires before successful main', async () => {
       const h = host();
       h.bind({exports:{
