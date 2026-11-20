@@ -61,9 +61,12 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   // wakeups have been scheduled but not yet delivered.
   const pendingTimers = new Set();
   const barrierWaiters = new Set();
+  // A matched barrier is still a live callback until its queued microtask runs.
+  const barrierWakeups = new Set();
   let pendingBarrier = [];
   const isQuiescent = () => !mainRunning && activeTasks.size === 0
-    && pendingTimers.size === 0 && barrierWaiters.size === 0;
+    && pendingTimers.size === 0 && barrierWaiters.size === 0
+    && barrierWakeups.size === 0;
   const notifyQuiescence = () => {
     if (!isQuiescent()) return;
     const waiters = quiescenceWaiters;
@@ -149,8 +152,18 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
         pendingBarrier = [];
         // The matched barrier is still a live pending wake until delivered.
         // stop() must revoke even this already-dequeued pair.
-        queueMicrotask(() => both.forEach(p => finishBarrier(p,
-          closed ? Error('E_ASYNC: task scope cancelled') : null)));
+        const wake = {};
+        barrierWakeups.add(wake);
+        queueMicrotask(() => {
+          try {
+            both.forEach(p => finishBarrier(p,
+              closed ? Error('E_ASYNC: task scope cancelled') : null));
+          } finally {
+            // Retire the scheduled callback only when it has actually run.
+            barrierWakeups.delete(wake);
+            notifyQuiescence();
+          }
+        });
       }
     });
   });
@@ -205,7 +218,7 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
     imports: Object.freeze({ sleep_ms, barrier, task_start, task_await, cooperate }),
     get cooperativeYields() { return cooperativeYields; },
     get activeTaskCount() { return activeTasks.size; },
-    get pendingHostWaitCount() { return pendingTimers.size + barrierWaiters.size; },
+    get pendingHostWaitCount() { return pendingTimers.size + barrierWaiters.size + barrierWakeups.size; }
     get physicallyQuiescent() { return isQuiescent(); },
     // Resolves only after main has returned/failed AND all admitted JSPI
     // task_invoke wrappers have physically settled. An uncooperative guest
@@ -220,6 +233,9 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
       mainRunning = true;
       try {
         const result = await WebAssembly.promising(instance.exports.main)();
+        // If cancellation was accepted before guest completion, it must not
+        // be replaced with a successful scalar return during main's unwind.
+        if (closed) throw Error('E_ASYNC: task scope cancelled');
         if (typeof result !== 'bigint') throw Error('E_ASYNC: main did not return int');
         if (jobs.size) throw Error('E_ASYNC: detached task or unawaited Future<int>');
         return result;
