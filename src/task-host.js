@@ -1,7 +1,10 @@
 /** Native guest Wasm JSPI bridge for experimental atto.async/2.
  * Task bodies run in WebAssembly, never in dynamically evaluated JavaScript.
  * Every task has one owning scope and a single-consumption Future<int> handle.
- * This first slice requires browser JSPI; no eager/sync task fallback. */
+ * This first slice requires browser JSPI; no eager/sync task fallback.
+ * Host close() is a cancellation request; whenQuiescent() tracks JSPI wrapper
+ * settlement. This ABI has NO guest Future.cancel() or MutexLease<T> unwind,
+ * and cannot certify cancellable guest tasks or lock cleanup. */
 export const MAX_TASKS = 64;
 const ASYNC_NAMES = new Set(['sleep_ms', 'barrier', 'task_start', 'task_await', 'cooperate']);
 
@@ -46,15 +49,32 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   let next = 1;
   let cooperativeYields = 0;
   if (!Number.isInteger(maxYields) || maxYields < 1 || maxYields > 65536) throw Error('E_ASYNC: invalid yield quota');
+  // The handle table is NOT an execution-lifetime ledger: task_await removes
+  // consumed handles before JSPI continuations have necessarily retired.
+  // Retain every admitted child until its async task_invoke wrapper settles.
   const jobs = new Map();
+  const activeTasks = new Set();
+  let mainRunning = false;
+  let mainStarted = false;
+  let quiescenceWaiters = [];
   let pendingBarrier = [];
+  const notifyQuiescence = () => {
+    if (mainRunning || activeTasks.size !== 0) return;
+    const waiters = quiescenceWaiters;
+    quiescenceWaiters = [];
+    for (const resolve of waiters) resolve();
+  };
+  const whenQuiescent = () => !mainRunning && activeTasks.size === 0
+    ? Promise.resolve()
+    : new Promise(resolve => quiescenceWaiters.push(resolve));
   const stop = error => {
     if (closed) return;
-    closed = true;
-    for (const task of jobs.values()) task.reject(error);
-    jobs.clear();
+    closed = true; // cancel REQUEST, not proof of physical task retirement
+    for (const task of activeTasks) task.reject(error);
+    jobs.clear(); // revoke future handles without erasing active continuations
     for (const unblock of pendingBarrier) unblock.reject(error);
     pendingBarrier = [];
+    notifyQuiescence();
   };
   const ensureOpen = () => {
     if (closed || !instance) throw Error('E_ASYNC: task scope closed or unbound');
@@ -90,7 +110,10 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
       if (pendingBarrier.length === 2) {
         const both = pendingBarrier;
         pendingBarrier = [];
-        queueMicrotask(() => { if (!closed) both.forEach(p => p.resolve()); });
+        // A stop between queueing and the microtask must wake BOTH parties.
+        // Otherwise task quiescence could wait forever for lost barriers.
+        queueMicrotask(() => both.forEach(p => closed
+          ? p.reject(Error('E_ASYNC: task scope cancelled')) : p.resolve()));
       }
     });
   });
@@ -108,14 +131,24 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
     // keeping the exact rejection observable through the owning Future handle.
     task.promise.catch(() => {});
     jobs.set(handle, task);
+    activeTasks.add(task);
     queueMicrotask(async () => {
-      if (closed) return;
       try {
+        // A task cancelled before admission into Wasm must never run a
+        // guest instruction; its handle has already been rejected by stop().
+        if (closed) return;
         const invoke = WebAssembly.promising(instance.exports.task_invoke);
         const result = await invoke(index);
         if (typeof result !== 'bigint') throw Error('E_ASYNC: task returned non-int value');
-        task.resolve(result);
-      } catch (error) { task.reject(error); }
+        if (!closed) task.resolve(result);
+      } catch (error) {
+        task.reject(error);
+      } finally {
+        // This is the JSPI wrapper's completion barrier, not evidence of
+        // tenant/actor memory teardown by itself.
+        activeTasks.delete(task);
+        notifyQuiescence();
+      }
     });
     return handle;
   };
@@ -130,16 +163,36 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   return {
     imports: Object.freeze({ sleep_ms, barrier, task_start, task_await, cooperate }),
     get cooperativeYields() { return cooperativeYields; },
+    get activeTaskCount() { return activeTasks.size; },
+    get physicallyQuiescent() { return !mainRunning && activeTasks.size === 0; },
+    // Resolves only after main has returned/failed AND all admitted JSPI
+    // task_invoke wrappers have physically settled. An uncooperative guest
+    // can block this indefinitely; supervisor must terminate its isolated
+    // Worker instead of claiming safe in-process reclamation.
+    whenQuiescent,
     bind(wasm) { if (instance) throw Error('E_ASYNC: cannot rebind task scope'); instance = wasm; },
     async runMain() {
       ensureOpen();
+      if (mainStarted) throw Error('E_ASYNC: main already started');
+      mainStarted = true;
+      mainRunning = true;
       try {
         const result = await WebAssembly.promising(instance.exports.main)();
         if (typeof result !== 'bigint') throw Error('E_ASYNC: main did not return int');
         if (jobs.size) throw Error('E_ASYNC: detached task or unawaited Future<int>');
         return result;
-      } finally { stop(Error('E_ASYNC: task scope exited')); }
+      } finally {
+        mainRunning = false;
+        stop(Error('E_ASYNC: task scope exited'));
+        notifyQuiescence();
+        // Never publish successful scope completion while a consumed handle
+        // still owns a running task continuation.
+        await whenQuiescent();
+      }
     },
-    close() { stop(Error('E_ASYNC: task scope cancelled')); },
+    close() {
+      stop(Error('E_ASYNC: task scope cancelled'));
+      return whenQuiescent();
+    },
   };
 }
