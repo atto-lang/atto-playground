@@ -34,7 +34,9 @@ self.onmessage = async ({ data }) => {
       result = taskHost ? await taskHost.runMain() : instance.exports.main();
     } catch (error) {
       host?.close();
-      taskHost?.close();
+      // A cancel request is not cleanup: do not reply until JSPI continuations
+    // and pending host callbacks have settled (or the parent kills this Worker).
+    await taskHost?.close();
       reply({ ok: false, message: describePanic(instance, error) });
       return;
     }
@@ -42,12 +44,16 @@ self.onmessage = async ({ data }) => {
     // main has returned: wait until every actor has handled all of its mail
     const fault = host ? await host.drain() : null;
     host?.close();
-    taskHost?.close();
+    // A cancel request is not cleanup: do not reply until JSPI continuations
+    // and pending host callbacks have settled (or the parent kills this Worker).
+    await taskHost?.close();
     if (fault) reply({ ok: false, message: fault, value: result.toString() });
     else reply({ ok: true, value: result.toString() });
   } catch (error) {
     host?.close();
-    taskHost?.close();
+    // A cancel request is not cleanup: do not reply until JSPI continuations
+    // and pending host callbacks have settled (or the parent kills this Worker).
+    await taskHost?.close();
     reply({ ok: false, message: /^E_[A-Z_]+: /.test(error?.message ?? '') ? error.message : `E_RUNTIME: ${error.message}` });
   }
 };
