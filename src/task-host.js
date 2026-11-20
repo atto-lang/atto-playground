@@ -218,7 +218,7 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
     imports: Object.freeze({ sleep_ms, barrier, task_start, task_await, cooperate }),
     get cooperativeYields() { return cooperativeYields; },
     get activeTaskCount() { return activeTasks.size; },
-    get pendingHostWaitCount() { return pendingTimers.size + barrierWaiters.size + barrierWakeups.size; }
+    get pendingHostWaitCount() { return pendingTimers.size + barrierWaiters.size + barrierWakeups.size; },
     get physicallyQuiescent() { return isQuiescent(); },
     // Resolves only after main has returned/failed AND all admitted JSPI
     // task_invoke wrappers have physically settled. An uncooperative guest
