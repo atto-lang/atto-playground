@@ -131,7 +131,7 @@ try {
       ...sec(3,[1,1]),
       ...sec(7,[1,...name('main'),0,1]),
       // main: i64.const 1000; call imported sleep_ms; drop; i64.const 42
-      ...sec(10,[1,9,0,0x42,0xe8,0x07,0x10,0,0x1a,0x42,42,0x0b]),
+      ...sec(10,[1,10,0,0x42,0xe8,0x07,0x10,0,0x1a,0x42,42,0x0b]),
       ...sec(0,[...name('atto.async'),2])
     ]);
     if(!WebAssembly.validate(wasm))throw Error('invalid cancellable core Wasm fixture');
