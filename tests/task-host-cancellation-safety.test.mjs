@@ -143,7 +143,8 @@ test('async/2 host cancellation retains active continuations until settlement', 
       assert.equal(h.pendingHostWaitCount,1);
       assert.equal(h.physicallyQuiescent,false);
       const another = h.imports.barrier(2n);
-      assert.equal(h.pendingHostWaitCount,2);
+      // Two unsettled waiters plus the queued handoff microtask.
+      assert.equal(h.pendingHostWaitCount,3);
       const closed = h.close();
       const outcomes = await Promise.allSettled([lone,another]);
       await closed;
