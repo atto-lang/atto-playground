@@ -92,6 +92,25 @@ test('async/2 host cancellation retains active continuations until settlement', 
       assert.equal(h.physicallyQuiescent,true);
     });
 
+    await t.test('consuming a Future cannot bypass active-task quota', async () => {
+      let release;
+      const pending = new Promise(r => { release = r; });
+      const h = createAsyncTaskHost({}, {maxTasks:1});
+      h.bind({exports:{
+        main: async () => 42n,
+        task_invoke: async () => { await pending; return 42n; },
+      }});
+      const handle = h.imports.task_start(0);
+      await Promise.resolve();
+      const observed = h.imports.task_await(handle);
+      assert.equal(h.activeTaskCount,1);
+      assert.throws(() => h.imports.task_start(0), /E_ASYNC: task quota exhausted/);
+      release();
+      assert.equal(await observed,42n);
+      await h.close();
+      assert.equal(h.physicallyQuiescent,true);
+    });
+
     await t.test('awaited child returns int and retires before successful main', async () => {
       const h = host();
       h.bind({exports:{
