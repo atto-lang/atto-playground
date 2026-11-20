@@ -57,22 +57,57 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   let mainRunning = false;
   let mainStarted = false;
   let quiescenceWaiters = [];
+  // Registered suspension callbacks, including matched barriers whose
+  // wakeups have been scheduled but not yet delivered.
+  const pendingTimers = new Set();
+  const barrierWaiters = new Set();
   let pendingBarrier = [];
+  const isQuiescent = () => !mainRunning && activeTasks.size === 0
+    && pendingTimers.size === 0 && barrierWaiters.size === 0;
   const notifyQuiescence = () => {
-    if (mainRunning || activeTasks.size !== 0) return;
+    if (!isQuiescent()) return;
     const waiters = quiescenceWaiters;
     quiescenceWaiters = [];
     for (const resolve of waiters) resolve();
   };
-  const whenQuiescent = () => !mainRunning && activeTasks.size === 0
+  const whenQuiescent = () => isQuiescent()
     ? Promise.resolve()
     : new Promise(resolve => quiescenceWaiters.push(resolve));
+  const finishBarrier = (entry, error) => {
+    if (entry.settled) return;
+    entry.settled = true;
+    barrierWaiters.delete(entry);
+    if (error) entry.reject(error);
+    else entry.resolve(0n);
+    notifyQuiescence();
+  };
+  // Bound, cancellable timers. Closing the scope cancels the actual host
+  // timeout and rejects its waiting JSPI continuation (not just its Future).
+  const suspendFor = ms => new Promise((resolve, reject) => {
+    const wait = { timer: null, settled: false, reject };
+    wait.timer = setTimeout(() => {
+      if (wait.settled) return;
+      wait.settled = true;
+      pendingTimers.delete(wait);
+      if (closed) reject(Error('E_ASYNC: task scope cancelled'));
+      else resolve();
+      notifyQuiescence();
+    }, ms);
+    pendingTimers.add(wait);
+  });
   const stop = error => {
     if (closed) return;
     closed = true; // cancel REQUEST, not proof of physical task retirement
     for (const task of activeTasks) task.reject(error);
     jobs.clear(); // revoke future handles without erasing active continuations
-    for (const unblock of pendingBarrier) unblock.reject(error);
+    for (const wait of [...pendingTimers]) {
+      if (wait.settled) continue;
+      wait.settled = true;
+      clearTimeout(wait.timer);
+      pendingTimers.delete(wait);
+      wait.reject(error);
+    }
+    for (const wait of [...barrierWaiters]) finishBarrier(wait, error);
     pendingBarrier = [];
     notifyQuiescence();
   };
@@ -91,14 +126,14 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
   const cooperate = new WebAssembly.Suspending(async () => {
     ensureOpen();
     if (cooperativeYields >= maxYields) throw Error('E_ASYNC: cooperative yield quota exhausted');
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await suspendFor(0);
     ensureOpen(); // cancelled/stale continuation must not resume
     cooperativeYields += 1;
   });
   const sleep_ms = new WebAssembly.Suspending(async n => {
     ensureOpen();
     const ms = checkInt(n, 0, 1000, 'sleep duration');
-    await new Promise(resolve => setTimeout(resolve, ms));
+    await suspendFor(ms);
     ensureOpen();
     return 0n;
   });
@@ -106,14 +141,16 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
     ensureOpen();
     checkInt(n, 2, 2, 'barrier parties');
     return new Promise((resolve, reject) => {
-      pendingBarrier.push({ resolve: () => resolve(0n), reject });
+      const entry = { resolve, reject, settled: false };
+      barrierWaiters.add(entry);
+      pendingBarrier.push(entry);
       if (pendingBarrier.length === 2) {
         const both = pendingBarrier;
         pendingBarrier = [];
-        // A stop between queueing and the microtask must wake BOTH parties.
-        // Otherwise task quiescence could wait forever for lost barriers.
-        queueMicrotask(() => both.forEach(p => closed
-          ? p.reject(Error('E_ASYNC: task scope cancelled')) : p.resolve()));
+        // The matched barrier is still a live pending wake until delivered.
+        // stop() must revoke even this already-dequeued pair.
+        queueMicrotask(() => both.forEach(p => finishBarrier(p,
+          closed ? Error('E_ASYNC: task scope cancelled') : null)));
       }
     });
   });
@@ -168,7 +205,8 @@ export function createAsyncTaskHost(module, { maxTasks = MAX_TASKS, maxYields = 
     imports: Object.freeze({ sleep_ms, barrier, task_start, task_await, cooperate }),
     get cooperativeYields() { return cooperativeYields; },
     get activeTaskCount() { return activeTasks.size; },
-    get physicallyQuiescent() { return !mainRunning && activeTasks.size === 0; },
+    get pendingHostWaitCount() { return pendingTimers.size + barrierWaiters.size; },
+    get physicallyQuiescent() { return isQuiescent(); },
     // Resolves only after main has returned/failed AND all admitted JSPI
     // task_invoke wrappers have physically settled. An uncooperative guest
     // can block this indefinitely; supervisor must terminate its isolated
