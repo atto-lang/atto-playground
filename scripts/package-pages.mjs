@@ -17,6 +17,7 @@ export const PAGES_ASSETS = Object.freeze([
   'src/guest-import-abi.js',
   'src/actor-host.js',
   'src/local-actor-registry.js',
+  'src/local-actor-job-router.js',
   'src/local-actor-groups.js',
   'src/actor-worker.js',
   'src/actor-abi-version.js',

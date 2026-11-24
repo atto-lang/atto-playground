@@ -33,7 +33,7 @@ async function execute(formalSource, operation, inputs) {
 test('compiled Atto Wasm dual-realm predicate: exhaustive booleans and killed mutants', async () => {
   assert.equal(sha256(compilerBytes), receipt.compiler_sha256, 'compiler must match its vendored provenance');
   assert.equal(compilerBytes.length, receipt.compiler_bytes);
-  assert.equal(receipt.guest_abi, 'atto.browser.guest.v1');
+  assert.equal(receipt.guest_abi, 'atto.browser.guest.v2');
   assert.match(receipt.source_head, /^[a-f0-9]{40}$/);
 
   const operations = [

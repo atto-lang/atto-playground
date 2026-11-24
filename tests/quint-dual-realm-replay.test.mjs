@@ -29,7 +29,7 @@ test('genuine Quint-generated states one-way refine compiled Atto guest admissio
   assert.equal(rawTraceTexts.length, projection.traces.length, 'all original ITF traces must be bundled');
   assert.equal(sha256(compilerBytes), compilerReceipt.compiler_sha256);
   assert.equal(compilerBytes.length, compilerReceipt.compiler_bytes);
-  assert.equal(compilerReceipt.guest_abi, 'atto.browser.guest.v1');
+  assert.equal(compilerReceipt.guest_abi, 'atto.browser.guest.v2');
 
   const compiler = await createCompiler(compilerBytes);
   const cached = new Map();
