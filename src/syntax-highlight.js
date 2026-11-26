@@ -5,7 +5,7 @@
 const KEYWORDS = new Set(('pub private define fnc routine class actor module struct trait interface ' +
   'final val const let mut return if then elif elseif else fi while do done for loop break continue ' +
   'match switch select over on when default end async await spawn yield generator supervisor channel emit is pipe AND OR XOR defer recover try catch throw raise panic ' +
-  'extends implements as new static suspend suspends trap shared untrusted type where ' +
+  'extends implements as new static suspend suspends susp trap shared untrusted type where ' +
   'readch writech nb using with use task').split(' '));
 const TYPES = new Set('int bool boolean void string String Symbol Result Option Error float f64 double ActorRef ActorMail Channel Future Task Observable Subscription'.split(' '));
 const LITERALS = new Set('true false null none nil None'.split(' '));
@@ -37,6 +37,7 @@ export function tokenizeAtto(source) {
       }
       add('string', end); continue;
     }
+    if (text[i] === '⧖' || text[i] === '∂') { add('keyword', i + 1); continue; }
     let special = false;
     for (const word of HYPHEN_KEYWORDS) {
       if (text.startsWith(word, i) && !/[A-Za-z0-9_]/.test(text[i + word.length] || '')) {
@@ -46,7 +47,7 @@ export function tokenizeAtto(source) {
     if (special) continue;
     const number = /^(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?)/.exec(text.slice(i));
     if (number) { add('number', i + number[0].length); continue; }
-    const id = /^[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i));
+    const id = /^[\p{L}_][\p{L}\p{M}\p{N}_]*/u.exec(text.slice(i));
     if (id) {
       const word = id[0], after = text.slice(i + word.length);
       const kind = KEYWORDS.has(word) ? 'keyword'
