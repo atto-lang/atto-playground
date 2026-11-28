@@ -32,7 +32,7 @@ export function admitWasm32Memory(bytes, { maxPages = MAX_GUEST_MEMORY_PAGES } =
     }
     throw new Error('E_ACTOR_MEMORY: malformed LEB32');
   };
-  // The Oreslang browser preflight rejects start functions. A start function
+  // The AttoLang browser preflight rejects start functions. A start function
   // would execute during instantiation, before the host binds guest memory.
   // Do not ban Wasm tables here: Atto class dispatch may legitimately use them.
   let importsSeen = false;

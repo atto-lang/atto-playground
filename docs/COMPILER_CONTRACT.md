@@ -16,7 +16,7 @@ A trap inside the compiler instance would leave its state undefined. `createComp
 
 The compiler adds no syntax of its own:
 
-- **Syntax** follows the reference compiler (`oreslang-source.java` `docs/grammar.ebnf` / `Parser.java`).
+- **Syntax** follows the reference compiler (`atto-source.java` `docs/grammar.ebnf` / `Parser.java`).
 - **`int`** follows the LLVM backend and spec chapter 17: signed 64-bit with checked arithmetic, where overflow is a panic.
 
 | Area | Admitted |
@@ -31,7 +31,7 @@ The compiler adds no syntax of its own:
 | Strings | `trim()`, `starts_with`, `ends_with`, `contains_literal`; content `eq` |
 | Classes | `[pub] define class Name as … end`: fields, one `constructor`, private-by-default methods, `pub static fnc` called as `Name.f()`, `new Name(…)`, moves |
 | Actors | `define actor Name as … end`: `let` state, `receive(ActorMail<int\|bool> mail): void`, `spawn Name()`, `ref.send(v)` |
-| Enums | `define enum Name as A B end` (the oreslang-source.llvm v1 design spelling; Java does not parse it yet) |
+| Enums | `define enum Name as A B end` (the atto-source.llvm v1 design spelling; Java does not parse it yet) |
 
 The full rules are in atto-source.rs `README.md`. Each one was checked against the Java reference compiler.
 

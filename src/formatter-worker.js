@@ -6,7 +6,7 @@ self.onmessage = async event => {
     const source = event.data?.source;
     if (typeof source !== 'string') throw new Error('Source is not text');
     if (new TextEncoder().encode(source).length > 65536) throw new Error('E_FORMAT_LIMIT: input exceeds 64 KiB');
-    const response=await fetch(new URL('../public/oreslang_format.wasm',import.meta.url),{cache:'no-store'});
+    const response=await fetch(new URL('../public/atto_format.wasm',import.meta.url),{cache:'no-store'});
     if(!response.ok) throw new Error('Formatter module failed to load');
     const bytes=new Uint8Array(await response.arrayBuffer());
     if(bytes.length !== FORMATTER_BYTES) throw new Error('Formatter module length differs from approved binary');

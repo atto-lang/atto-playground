@@ -36,8 +36,8 @@ export const PAGES_ASSETS = Object.freeze([
   'src/compiler-pin.js',
   'public/atto_compiler.wasm',
   'public/atto_compiler.receipt.json',
-  'public/oreslang_format.wasm',
-  'public/oreslang_format.receipt.json',
+  'public/atto_format.wasm',
+  'public/atto_format.receipt.json',
   'docs/COMPILER_CONTRACT.md',
   'examples/actors.atto',
   'examples/channel-bounded.atto',
@@ -117,8 +117,8 @@ export async function packagePages({
       createHash('sha256').update(compiler).digest('hex') !== receipt.compiler_sha256) {
     throw new Error('Compiler receipt, pinned digest or byte length does not match');
   }
-  const formatter = files.find(x => x.name === 'public/oreslang_format.wasm').bytes;
-  const formatterReceipt = JSON.parse(files.find(x => x.name === 'public/oreslang_format.receipt.json').bytes.toString('utf8'));
+  const formatter = files.find(x => x.name === 'public/atto_format.wasm').bytes;
+  const formatterReceipt = JSON.parse(files.find(x => x.name === 'public/atto_format.receipt.json').bytes.toString('utf8'));
   if (formatterReceipt.schema !== 'atto.browser.formatter.vendor.v1' ||
       formatterReceipt.source_head !== FORMATTER_SOURCE_COMMIT ||
       formatterReceipt.wasm_sha256 !== FORMATTER_SHA256 ||

@@ -55,7 +55,7 @@ The highlighting mirror uses conservative token classes based on the AttoLang fo
 
 ## Canonical browser formatter
 
-The **Format** and **Check format** actions run the actual Rust formatter implementation compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact has a SHA-256 pin and source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
+The **Format** and **Check format** actions run the actual Rust formatter implementation compiled to a separate, import-free `wasm32-unknown-unknown` module. The precompiled 198230-byte Wasm artifact is stored at `public/atto_format.wasm` and has an unchanged SHA-256 pin and `public/atto_format.receipt.json` source-commit receipt; no user code is sent to a formatting server. A disposable worker imposes a 6-second deadline. Format edits only on success, preserves approximate caret positions and uses browser-native undo where supported. Check format never edits code. `Alt+Shift+F` invokes Format. The formatter is a formatting tool, **not** the AttoLang type checker or a guarantee of compiler acceptance.
 
 ## Portable saved-program backups
 
